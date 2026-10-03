@@ -3808,6 +3808,64 @@ fun PhotoDetailDialog(
                                             Text("Advanced Typography & Text Customization", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                                         Text("Double-tap the text on screen to edit inline or edit below", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.5f))
 
+                                        if (false) // Text Formatting Row (Bold, Italic, Underline, RTL)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            IconButton(
+                                                onClick = { watermarkBold = !watermarkBold },
+                                                modifier = Modifier
+                                                    .size(40.dp)
+                                                    .background(if (watermarkBold) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                                            ) {
+                                                Text("B", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold), color = if (watermarkBold) MaterialTheme.colorScheme.onPrimaryContainer else Color.White)
+                                            }
+
+                                            IconButton(
+                                                onClick = { watermarkItalic = !watermarkItalic },
+                                                modifier = Modifier
+                                                    .size(40.dp)
+                                                    .background(if (watermarkItalic) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                                            ) {
+                                                Text("I", style = MaterialTheme.typography.titleMedium.copy(fontStyle = FontStyle.Italic), color = if (watermarkItalic) MaterialTheme.colorScheme.onPrimaryContainer else Color.White)
+                                            }
+
+                                            IconButton(
+                                                onClick = { watermarkUnderline = !watermarkUnderline },
+                                                modifier = Modifier
+                                                    .size(40.dp)
+                                                    .background(if (watermarkUnderline) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                                            ) {
+                                                Text("U", style = MaterialTheme.typography.titleMedium.copy(textDecoration = TextDecoration.Underline), color = if (watermarkUnderline) MaterialTheme.colorScheme.onPrimaryContainer else Color.White)
+                                            }
+
+                                            IconButton(
+                                                onClick = { watermarkRtl = !watermarkRtl },
+                                                modifier = Modifier
+                                                    .size(40.dp)
+                                                    .background(if (watermarkRtl) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                                            ) {
+                                                Text("RTL", style = MaterialTheme.typography.labelSmall, color = if (watermarkRtl) MaterialTheme.colorScheme.onPrimaryContainer else Color.White)
+                                            }
+
+                                            Spacer(modifier = Modifier.weight(1f))
+
+                                            // Text alignment buttons
+                                            val aligns = listOf("left" to "L", "center" to "C", "right" to "R")
+                                            aligns.forEach { (key, label) ->
+                                                IconButton(
+                                                    onClick = { watermarkTextAlign = key },
+                                                    modifier = Modifier
+                                                        .size(36.dp)
+                                                        .background(if (watermarkTextAlign == key) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent, CircleShape)
+                                                ) {
+                                                    Text(label, style = MaterialTheme.typography.bodySmall, color = if (watermarkTextAlign == key) MaterialTheme.colorScheme.onSecondaryContainer else Color.White)
+                                                }
+                                            }
+                                        }
+
                                         /* if (false) OutlinedTextField(
                                             singleLine = true,
                                             shape = RoundedCornerShape(12.dp),
@@ -4247,7 +4305,52 @@ fun PhotoDetailDialog(
                                              Text("Add Image Layer from Local Picker")
                                          }
 
-                                         /* if (false) {
+                                         if (false) {
+                                             // Preselected graphic assets as layering shortcuts
+                                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                             Text("Or select quick graphic layout presets:", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.6f))
+                                             val presets = listOf(
+                                                 "https://images.unsplash.com/photo-1541701494587-cb58502866ab" to "Abstract Border",
+                                                 "https://images.unsplash.com/photo-1550684848-fac1c5b4e853" to "Neon Grid",
+                                                 "https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5" to "Classical Frame",
+                                                 "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe" to "Retro Backdrop"
+                                             )
+                                             Row(
+                                                 modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                             ) {
+                                                 presets.forEach { (url, title) ->
+                                                     FilterChip(
+                                                         selected = false,
+                                                         onClick = {
+                                                             activeLayers.add(ImageLayerData(imageUrl = url))
+                                                         },
+                                                         label = { Text(title, color = Color.White) },
+                                                         colors = FilterChipDefaults.filterChipColors(
+                                                             containerColor = Color.White.copy(alpha = 0.1f)
+                                                         ),
+                                                         leadingIcon = { Icon(Icons.Default.Add, null, tint = Color.LightGray, modifier = Modifier.size(12.dp)) }
+                                                     )
+                                                 }
+                                             }
+                                         }
+
+                                         // List of current Layer items with Bring to Front, Send to Back, Delete actions
+                                         if (activeLayers.isNotEmpty()) {
+                                              // Selected Layer Fine-Tuning Controls
+                                              val selectedLayer = activeLayers.find { it.id == activeLayerId }
+                                              if (selectedLayer != null) {
+                                                  val sIdx = activeLayers.indexOfFirst { it.id == selectedLayer.id }
+                                                  SelectedLayerControls(
+                                                      selectedLayer = selectedLayer,
+                                                      sIdx = sIdx,
+                                                      activeLayers = activeLayers,
+                                                      onDeselect = { activeLayerId = null },
+                                                      onActiveLayerIdChanged = { id -> activeLayerId = id }
+                                                  )
+                                                  Spacer(modifier = Modifier.height(8.dp))
+                                              }
+                                              /* if (false) {
                                                   val sIdx = activeLayers.indexOfFirst { it.id == selectedLayer.id }
                                                   Column(
                                                       modifier = Modifier
