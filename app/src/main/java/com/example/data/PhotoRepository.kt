@@ -8,6 +8,7 @@ import com.amresalehin.emreview.ai.OpenAiCompatibleProvider
 import com.amresalehin.emreview.ai.VisionModel
 import com.example.data.KeyValueEntry
 import com.example.data.PhotoDao
+import com.example.data.Photo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
