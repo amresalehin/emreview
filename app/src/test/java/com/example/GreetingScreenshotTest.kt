@@ -24,7 +24,7 @@ class GreetingScreenshotTest {
     composeTestRule.setContent { 
       MyApplicationTheme { 
         androidx.compose.material3.Text(
-          text = "Smart Gallery Dashboard Overview",
+          text = "emreview Dashboard Overview",
           style = androidx.compose.material3.MaterialTheme.typography.titleLarge
         ) 
       } 
