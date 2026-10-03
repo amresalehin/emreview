@@ -1,11 +1,13 @@
 package com.example.data
 
+import android.content.Context
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
@@ -33,7 +35,12 @@ interface PhotoDao {
     @Query("DELETE FROM photos WHERE id = :id")
     suspend fun deletePhotoById(id: Int)
 
-    // System Configurations Key Value store
+    @Query("DELETE FROM photos WHERE isDeleted = 1 AND deletedTimestamp > 0 AND deletedTimestamp <= :cutoff")
+    suspend fun permanentlyDeleteDeletedBefore(cutoff: Long): Int
+
+    @Query("SELECT * FROM photos WHERE isSynced = 0 AND isDeleted = 0")
+    suspend fun getUnsyncedPhotos(): List<Photo>
+
     @Query("SELECT * FROM app_config WHERE configKey = :key")
     suspend fun getConfig(key: String): KeyValueEntry?
 
@@ -47,4 +54,11 @@ interface PhotoDao {
 @Database(entities = [Photo::class, KeyValueEntry::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun photoDao(): PhotoDao
+
+    companion object {
+        const val DATABASE_NAME = "smart_gallery_vault.db"
+
+        fun build(context: Context): AppDatabase =
+            Room.databaseBuilder(context, AppDatabase::class.java, DATABASE_NAME).build()
+    }
 }
