@@ -219,7 +219,7 @@ class MainActivity : ComponentActivity() {
                                 header = {
                                     Icon(
                                         imageVector = Icons.Default.CloudSync,
-                                        contentDescription = "Smart Gallery",
+                                        contentDescription = "emreview",
                                         tint = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(28.dp).padding(vertical = 12.dp)
                                     )
