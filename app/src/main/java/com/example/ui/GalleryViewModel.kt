@@ -29,7 +29,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.data.VaultPinSecurity
-import com.amresalehin.emreview.ai.AiProvider
+import com.example.ai.AiProvider
 import com.amresalehin.emreview.ai.OpenAiCompatibleProvider
 import com.amresalehin.emreview.ai.VisionModel
 import kotlinx.coroutines.isActive
