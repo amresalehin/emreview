@@ -6,6 +6,8 @@ import android.util.Log
 import com.example.ai.AiProvider
 import com.example.ai.OpenAiCompatibleProvider
 import com.example.ai.VisionModel
+import com.example.data.KeyValueEntry
+import com.example.data.PhotoDao
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
