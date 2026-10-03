@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-  namespace = "com.amresalehin.emreview"
+  namespace = "com.example"
   compileSdk = 36
 
   defaultConfig {
