@@ -30,21 +30,35 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Build debug APK
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug
+      - name: Check project
+        run: ./gradlew --no-daemon --stacktrace lintDebug testDebugUnitTest
 
-      - name: Run unit tests
-        run: ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest
+      - name: Build optimized release APKs
+        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
 
-      - name: Verify APK
+      - name: Verify APKs and print sizes
+        shell: bash
         run: |
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          unzip -t app/build/outputs/apk/debug/app-debug.apk >/dev/null
-          file app/build/outputs/apk/debug/app-debug.apk
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/release/*.apk)
+          test "${#apks[@]}" -gt 0
+          for apk in "${apks[@]}"; do
+            echo "=== ${apk} ==="
+            test -s "${apk}"
+            unzip -t "${apk}" >/dev/null
+            file "${apk}"
+            du -h "${apk}"
+          done
 
-      - name: Upload APK
+          if find app/build/outputs/apk/release -type f -name '*.apk' -print0 | xargs -0 unzip -l 2>/dev/null | grep -E 'robolectric|robolectric-nativeruntime|sqlite4java|com/ibm/icu|fonts/'; then
+            echo "ERROR: test/runtime resources leaked into the release APK."
+            exit 1
+          fi
+
+      - name: Upload optimized release APKs
         uses: actions/upload-artifact@v4
         with:
-          name: emreview-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: emreview-release-apks
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
