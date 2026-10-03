@@ -2,6 +2,7 @@ package com.example.ui
 
 import android.app.Application
 import android.content.ContentUris
+import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
@@ -14,6 +15,7 @@ import com.example.data.Photo
 import com.example.ui.screens.ImageLayerData
 import com.example.ui.screens.deserializeLayers
 import com.example.data.PhotoRepository
+import com.example.data.SecureSecretStore
 import com.example.data.UnauthorizedException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -35,6 +37,8 @@ import com.example.ai.VisionModel
 import kotlinx.coroutines.isActive
 
 class GalleryViewModel(application: Application, private val repository: PhotoRepository) : AndroidViewModel(application) {
+
+    private val secretStore = SecureSecretStore(application.applicationContext)
 
     // Filter properties
     private val _searchText = MutableStateFlow("")
@@ -722,17 +726,27 @@ class GalleryViewModel(application: Application, private val repository: PhotoRe
     }
 
     /** Provider-neutral AI configuration and model discovery. */
-    suspend fun getAiProviderConfig(): AiProviderConfig = AiProviderConfig(
-        repository.getSystemConfig("ai_base_url").orEmpty(),
-        repository.getSystemConfig("ai_api_key").orEmpty(),
-        repository.getSystemConfig("ai_model_id").orEmpty()
-    )
+    suspend fun getAiProviderConfig(): AiProviderConfig {
+        val legacyKey = repository.getSystemConfig("ai_api_key")
+        val secureKey = secretStore.get("ai_api_key")
+        val apiKey = secureKey ?: legacyKey.orEmpty()
+        if (secureKey == null && !legacyKey.isNullOrBlank()) {
+            secretStore.put("ai_api_key", legacyKey)
+            repository.deleteSystemConfig("ai_api_key")
+        }
+        return AiProviderConfig(
+            repository.getSystemConfig("ai_base_url").orEmpty(),
+            apiKey,
+            repository.getSystemConfig("ai_model_id").orEmpty()
+        )
+    }
 
     fun saveAiProviderConfig(baseUrl: String, apiKey: String, modelId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.saveSystemConfig("ai_base_url", baseUrl.trim().trimEnd('/'))
-            repository.saveSystemConfig("ai_api_key", apiKey.trim())
             repository.saveSystemConfig("ai_model_id", modelId.trim())
+            secretStore.put("ai_api_key", apiKey.trim())
+            repository.deleteSystemConfig("ai_api_key")
         }
     }
 
@@ -1094,114 +1108,112 @@ class GalleryViewModel(application: Application, private val repository: PhotoRe
     }
 
     /**
-     * Scan Local Device MediaStore for real physical Images & Videos
+     * Incrementally scan MediaStore without loading all Photo entities into memory.
+     * Only lightweight existing URIs are retained for duplicate detection.
      */
     fun scanLocalMedia() {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>().applicationContext
-            val photosList = mutableListOf<Photo>()
+            val existingUrls = repository.getAllPhotoUrls().toMutableSet()
+            val batch = ArrayList<Photo>(500)
 
-            // 1. Scan External Images
-            val imageUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            suspend fun flushBatch() {
+                if (batch.isEmpty()) return
+                repository.insertPhotos(batch.toList())
+                batch.clear()
+            }
+
+            suspend fun scanCollection(
+                contentUri: Uri,
+                projection: Array<String>,
+                baseTag: String,
+                defaultBucket: String
+            ) {
+                try {
+                    context.contentResolver.query(
+                        contentUri,
+                        projection,
+                        null,
+                        null,
+                        "${MediaStore.MediaColumns.DATE_ADDED} DESC"
+                    )?.use { cursor ->
+                        val idColumn = cursor.getColumnIndex(MediaStore.MediaColumns._ID)
+                        val titleColumn = cursor.getColumnIndex(MediaStore.MediaColumns.TITLE)
+                        val dateColumn = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_ADDED)
+                        val bucketColumn = cursor.getColumnIndex(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+                        val sizeColumn = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE)
+                        val widthColumn = cursor.getColumnIndex(MediaStore.MediaColumns.WIDTH)
+                        val heightColumn = cursor.getColumnIndex(MediaStore.MediaColumns.HEIGHT)
+                        val mimeColumn = cursor.getColumnIndex(MediaStore.MediaColumns.MIME_TYPE)
+
+                        while (cursor.moveToNext()) {
+                            if (idColumn < 0) continue
+                            val id = cursor.getLong(idColumn)
+                            val contentUriString = ContentUris.withAppendedId(contentUri, id).toString()
+                            if (existingUrls.contains(contentUriString)) continue
+
+                            val title = if (titleColumn >= 0) cursor.getString(titleColumn) ?: "$baseTag-$id" else "$baseTag-$id"
+                            val date = if (dateColumn >= 0) cursor.getLong(dateColumn) * 1000L else System.currentTimeMillis()
+                            val bucket = if (bucketColumn >= 0) cursor.getString(bucketColumn) ?: defaultBucket else defaultBucket
+                            val sizeBytes = if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) cursor.getLong(sizeColumn) else 0L
+                            val width = if (widthColumn >= 0 && !cursor.isNull(widthColumn)) cursor.getInt(widthColumn) else 0
+                            val height = if (heightColumn >= 0 && !cursor.isNull(heightColumn)) cursor.getInt(heightColumn) else 0
+                            val mimeType = if (mimeColumn >= 0) cursor.getString(mimeColumn).orEmpty() else ""
+
+                            batch += Photo(
+                                imageUrl = contentUriString,
+                                title = title,
+                                description = "Local media imported dynamically from directory '$bucket'.",
+                                dateAdded = date,
+                                location = bucket,
+                                isSynced = false,
+                                isLocked = false,
+                                tags = "$baseTag,${bucket.lowercase().replace(" ", "")}",
+                                sizeBytes = sizeBytes,
+                                width = width,
+                                height = height,
+                                mimeType = mimeType
+                            )
+
+                            if (batch.size >= 500) {
+                                existingUrls.addAll(batch.map { it.imageUrl })
+                                flushBatch()
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("GalleryViewModel", "Error scanning MediaStore $baseTag collection", e)
+                }
+            }
+
             val imageProjection = arrayOf(
                 MediaStore.Images.Media._ID,
                 MediaStore.Images.Media.TITLE,
                 MediaStore.Images.Media.DATE_ADDED,
-                MediaStore.Images.Media.BUCKET_DISPLAY_NAME
+                MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
+                MediaStore.Images.Media.SIZE,
+                MediaStore.Images.Media.WIDTH,
+                MediaStore.Images.Media.HEIGHT,
+                MediaStore.Images.Media.MIME_TYPE
             )
-            try {
-                context.contentResolver.query(imageUri, imageProjection, null, null, "${MediaStore.Images.Media.DATE_ADDED} DESC")?.use { cursor ->
-                    val idColumn = cursor.getColumnIndex(MediaStore.Images.Media._ID)
-                    val titleColumn = cursor.getColumnIndex(MediaStore.Images.Media.TITLE)
-                    val dateColumn = cursor.getColumnIndex(MediaStore.Images.Media.DATE_ADDED)
-                    val bucketColumn = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-
-                    while (cursor.moveToNext()) {
-                        val id = if (idColumn != -1) cursor.getLong(idColumn) else 0L
-                        val title = if (titleColumn != -1) cursor.getString(titleColumn) ?: "Image_$id" else "Image_$id"
-                        val date = if (dateColumn != -1) cursor.getLong(dateColumn) * 1000L else System.currentTimeMillis()
-                        val bucket = if (bucketColumn != -1) cursor.getString(bucketColumn) ?: "Local Pictures" else "Local Pictures"
-                        val contentUri = ContentUris.withAppendedId(imageUri, id).toString()
-
-                        val cleanBucket = bucket.lowercase().replace(" ", "")
-                        val tagsList = mutableListOf("image", cleanBucket)
-                        
-                        photosList.add(
-                            Photo(
-                                imageUrl = contentUri,
-                                title = title,
-                                description = "Local image imported dynamically from directory '$bucket'.",
-                                dateAdded = date,
-                                location = bucket,
-                                isSynced = false,
-                                isLocked = false,
-                                tags = tagsList.joinToString(", ")
-                            )
-                        )
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("GalleryViewModel", "Error scanning MediaStore Images", e)
-            }
-
-            // 2. Scan External Videos
-            val videoUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
             val videoProjection = arrayOf(
                 MediaStore.Video.Media._ID,
                 MediaStore.Video.Media.TITLE,
                 MediaStore.Video.Media.DATE_ADDED,
-                MediaStore.Video.Media.BUCKET_DISPLAY_NAME
+                MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
+                MediaStore.Video.Media.SIZE,
+                MediaStore.Video.Media.WIDTH,
+                MediaStore.Video.Media.HEIGHT,
+                MediaStore.Video.Media.MIME_TYPE
             )
-            try {
-                context.contentResolver.query(videoUri, videoProjection, null, null, "${MediaStore.Video.Media.DATE_ADDED} DESC")?.use { cursor ->
-                    val idColumn = cursor.getColumnIndex(MediaStore.Video.Media._ID)
-                    val titleColumn = cursor.getColumnIndex(MediaStore.Video.Media.TITLE)
-                    val dateColumn = cursor.getColumnIndex(MediaStore.Video.Media.DATE_ADDED)
-                    val bucketColumn = cursor.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
 
-                    while (cursor.moveToNext()) {
-                        val id = if (idColumn != -1) cursor.getLong(idColumn) else 0L
-                        val title = if (titleColumn != -1) cursor.getString(titleColumn) ?: "Video_$id" else "Video_$id"
-                        val date = if (dateColumn != -1) cursor.getLong(dateColumn) * 1000L else System.currentTimeMillis()
-                        val bucket = if (bucketColumn != -1) cursor.getString(bucketColumn) ?: "Local Video" else "Local Video"
-                        val contentUri = ContentUris.withAppendedId(videoUri, id).toString()
+            scanCollection(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, imageProjection, "image", "Local Pictures")
+            scanCollection(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, videoProjection, "video", "Local Videos")
+            flushBatch()
 
-                        val cleanBucket = bucket.lowercase().replace(" ", "")
-                        val tagsList = mutableListOf("video", cleanBucket)
-
-                        photosList.add(
-                            Photo(
-                                imageUrl = contentUri,
-                                title = title,
-                                description = "Local video file imported dynamically from directory '$bucket'.",
-                                dateAdded = date,
-                                location = bucket,
-                                isSynced = false,
-                                isLocked = false,
-                                tags = tagsList.joinToString(", ")
-                            )
-                        )
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("GalleryViewModel", "Error scanning MediaStore Videos", e)
-            }
-
-            // Insert scanned Media to DB
-            if (photosList.isNotEmpty()) {
-                val existedPhotos = repository.allPhotos.firstOrNull() ?: emptyList()
-                val existedUrls = existedPhotos.map { it.imageUrl }.toSet()
-
-                photosList.forEach { photo ->
-                    if (!existedUrls.contains(photo.imageUrl)) {
-                        repository.insertPhoto(photo)
-                    }
-                }
-                Log.i("GalleryViewModel", "Completed local storage scanning. Injected ${photosList.size} new elements.")
-            }
+            Log.i("GalleryViewModel", "Completed incremental local media scan.")
         }
     }
-
 
 
     private fun getRotationFromTags(tags: String): Float {
