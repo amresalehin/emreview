@@ -32,6 +32,12 @@ interface PhotoDao {
     @Delete
     suspend fun deletePhoto(photo: Photo)
 
+    @Query("DELETE FROM photos WHERE isDeleted = 1 AND deletedTimestamp > 0 AND deletedTimestamp <= :cutoff")
+    suspend fun permanentlyDeleteDeletedBefore(cutoff: Long): Int
+
+    @Query("SELECT * FROM photos WHERE isSynced = 0 AND isDeleted = 0")
+    suspend fun getUnsyncedPhotos(): List<Photo>
+
     @Query("DELETE FROM photos WHERE id = :id")
     suspend fun deletePhotoById(id: Int)
 
