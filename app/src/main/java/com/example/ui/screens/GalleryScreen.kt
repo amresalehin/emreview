@@ -48,6 +48,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.example.ai.VisionModel
+import kotlinx.coroutines.launch
 import com.example.data.Photo
 import com.example.ui.GalleryViewModel
 import com.example.ui.SyncFilter
@@ -97,6 +99,24 @@ fun GalleryScreen(
 
     val viewMode by viewModel.viewMode.collectAsState()
     val sortOption by viewModel.sortOption.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
+    var showAiSettingsDialog by remember { mutableStateOf(false) }
+    var aiBaseUrl by remember { mutableStateOf("") }
+    var aiApiKey by remember { mutableStateOf("") }
+    var aiModelId by remember { mutableStateOf("") }
+    var aiModels by remember { mutableStateOf<List<VisionModel>>(emptyList()) }
+    var aiDiscoveryError by remember { mutableStateOf<String?>(null) }
+    var aiDiscovering by remember { mutableStateOf(false) }
+
+    LaunchedEffect(showAiSettingsDialog) {
+        if (showAiSettingsDialog) {
+            val config = viewModel.getAiProviderConfig()
+            aiBaseUrl = config.baseUrl
+            aiApiKey = config.apiKey
+            aiModelId = config.modelId
+            aiDiscoveryError = null
+        }
+    }
 
     // Grouping logic by month and year
     val groupedPhotos = remember(publicPhotos) {
@@ -175,6 +195,23 @@ fun GalleryScreen(
                     Icon(
                         imageVector = if (viewMode == ViewMode.GRID) Icons.Default.ViewList else Icons.Default.GridView,
                         contentDescription = "Toggle View Mode",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                IconButton(
+                    onClick = {
+                        showAiSettingsDialog = true
+                        aiDiscoveryError = null
+                    },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                        .testTag("ai_settings_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "AI Provider Settings",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -1344,6 +1381,138 @@ fun GalleryScreen(
     }
 
         // Single File Storage Details Dialog
+        if (showAiSettingsDialog) {
+            AlertDialog(
+                onDismissRequest = { showAiSettingsDialog = false },
+                title = { Text("AI Provider") },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            "Use any OpenAI-compatible vision API. Enter its base URL and key, discover available models, then select one.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        OutlinedTextField(
+                            value = aiBaseUrl,
+                            onValueChange = { aiBaseUrl = it },
+                            label = { Text("Base URL") },
+                            placeholder = { Text("https://api.openai.com/v1") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+
+                        OutlinedTextField(
+                            value = aiApiKey,
+                            onValueChange = { aiApiKey = it },
+                            label = { Text("API key") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+                        )
+
+                        OutlinedTextField(
+                            value = aiModelId,
+                            onValueChange = { aiModelId = it },
+                            label = { Text("Vision model") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                enabled = aiBaseUrl.isNotBlank() && aiApiKey.isNotBlank() && !aiDiscovering,
+                                onClick = {
+                                    coroutineScope.launch {
+                                        aiDiscovering = true
+                                        aiDiscoveryError = null
+                                        val result = viewModel.discoverAiModels(aiBaseUrl, aiApiKey)
+                                        result.fold(
+                                            onSuccess = { aiModels = it },
+                                            onFailure = { aiDiscoveryError = it.message ?: "Model discovery failed" }
+                                        )
+                                        aiDiscovering = false
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(if (aiDiscovering) "Discovering…" else "Discover models")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    aiModels = emptyList()
+                                    aiModelId = ""
+                                }
+                            ) {
+                                Text("Clear")
+                            }
+                        }
+
+                        aiDiscoveryError?.let {
+                            Text(
+                                text = it,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+
+                        if (aiModels.isNotEmpty()) {
+                            Text(
+                                "Discovered models",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                aiModels.forEach { model ->
+                                    TextButton(
+                                        onClick = { aiModelId = model.id },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                            Text(
+                                                model.name,
+                                                fontWeight = if (model.id == aiModelId) FontWeight.Bold else FontWeight.Medium
+                                            )
+                                            Text(
+                                                if (model.capabilityKnown) "Vision capability verified" else "Vision capability unverified",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        enabled = aiBaseUrl.isNotBlank() && aiApiKey.isNotBlank() && aiModelId.isNotBlank(),
+                        onClick = {
+                            viewModel.saveAiProviderConfig(aiBaseUrl, aiApiKey, aiModelId)
+                            showAiSettingsDialog = false
+                        }
+                    ) {
+                        Text("Save")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAiSettingsDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
         if (showSingleFileDetailsDialog != null) {
             Dialog(
                 onDismissRequest = { showSingleFileDetailsDialog = null },
