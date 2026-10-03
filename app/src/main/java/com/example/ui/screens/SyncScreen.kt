@@ -191,6 +191,7 @@ fun SyncScreen(
     var aiModels by remember { mutableStateOf<List<String>>(emptyList()) }
     var aiStatus by remember { mutableStateOf("") }
     var aiLoading by remember { mutableStateOf(false) }
+    val aiScope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         val cfg = viewModel.getAiProviderConfig()
@@ -214,7 +215,7 @@ fun SyncScreen(
                     if (aiBaseUrl.isBlank()) aiStatus = "Enter a base URL first." else {
                         aiLoading = true
                         aiStatus = "Discovering vision-capable models..."
-                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                        aiScope.launch {
                             viewModel.discoverAiModels(aiBaseUrl, aiApiKey).fold(
                                 onSuccess = { found ->
                                     aiModels = found.map { it.id }
@@ -229,7 +230,33 @@ fun SyncScreen(
                 }, enabled = !aiLoading, modifier = Modifier.weight(1f)) { Text(if (aiLoading) "Discovering..." else "Fetch Models") }
                 OutlinedButton(onClick = { viewModel.saveAiProviderConfig(aiBaseUrl, aiApiKey, aiModelId); aiStatus = "AI provider settings saved." }, enabled = aiModelId.isNotBlank(), modifier = Modifier.weight(1f)) { Text("Save") }
             }
-            OutlinedTextField(value = aiModelId, onValueChange = { aiModelId = it }, label = { Text("Vision model ID") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("ai_model_id"))
+            if (aiModels.isNotEmpty()) {
+                var modelMenuExpanded by remember { mutableStateOf(false) }
+                Box {
+                    OutlinedTextField(
+                        value = aiModelId,
+                        onValueChange = { aiModelId = it },
+                        label = { Text("Vision model") },
+                        readOnly = true,
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("ai_model_id")
+                    )
+                    DropdownMenu(
+                        expanded = modelMenuExpanded,
+                        onDismissRequest = { modelMenuExpanded = false }
+                    ) {
+                        aiModels.forEach { model ->
+                            DropdownMenuItem(
+                                text = { Text(model) },
+                                onClick = { aiModelId = model; modelMenuExpanded = false }
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.matchParentSize().clickable { modelMenuExpanded = true })
+                }
+            } else {
+                OutlinedTextField(value = aiModelId, onValueChange = { aiModelId = it }, label = { Text("Vision model ID") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("ai_model_id"))
+            }
             if (aiStatus.isNotBlank()) Text(aiStatus, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
