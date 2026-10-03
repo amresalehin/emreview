@@ -47,6 +47,10 @@ class PhotoRepository(private val photoDao: PhotoDao) {
         photoDao.insertConfig(KeyValueEntry(key, value))
     }
 
+    suspend fun deleteSystemConfig(key: String) {
+        photoDao.deleteConfig(key)
+    }
+
     // Photo CRUD operations
     suspend fun getUnsyncedPhotos(): List<Photo> = photoDao.getUnsyncedPhotos()
 
@@ -231,7 +235,7 @@ Use 3-12 lowercase tags. Do not invent details that are not visible."""
         photo: Photo
     ): String? = withContext(Dispatchers.IO) {
         try {
-            val isVideo = photo.imageUrl.contains("video", ignoreCase = true) || photo.tags.contains("video", ignoreCase = true)
+            val isVideo = photo.mimeType.startsWith("video/", ignoreCase = true) || photo.tags.contains("video", ignoreCase = true)
             val fileExtension = if (isVideo) ".mp4" else ".jpg"
             val mimeType = if (isVideo) "video/mp4" else "image/jpeg"
             val fileName = if (photo.title.lowercase().endsWith(fileExtension)) photo.title else "${photo.title}$fileExtension"
