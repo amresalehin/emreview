@@ -2090,5 +2090,10 @@ data class GalleryFilters(
     val selectedCustomLabel: String? = null
 )
 
+@android.annotation.SuppressLint("MissingPermission")
+private fun invalidateGoogleToken(context: android.content.Context, token: String) {
+    GoogleAuthUtil.invalidateToken(context, token)
+}
+
 data class AiProviderConfig(val baseUrl: String, val apiKey: String, val modelId: String)
 
