@@ -1002,7 +1002,7 @@ class GalleryViewModel(application: Application, private val repository: PhotoRe
                                     diagnosticLog = _syncingState.value.diagnosticLog + "[RETRY] Access Token expired. Re-authorizing account..."
                                 )
                                 try {
-                                    GoogleAuthUtil.invalidateToken(getApplication(), resolvedToken)
+                                    invalidateGoogleToken(getApplication(), resolvedToken)
                                 } catch (ex: Exception) {
                                     Log.w("GalleryViewModel", "Failed to invalidate token", ex)
                                 }
