@@ -43,6 +43,10 @@ class PhotoRepository(private val photoDao: PhotoDao) {
     }
 
     // Photo CRUD operations
+    suspend fun getUnsyncedPhotos(): List<Photo> = photoDao.getUnsyncedPhotos()
+
+    suspend fun permanentlyDeleteDeletedBefore(cutoff: Long): Int = photoDao.permanentlyDeleteDeletedBefore(cutoff)
+
     suspend fun getPhotoById(id: Int): Photo? {
         return photoDao.getPhotoById(id)
     }
