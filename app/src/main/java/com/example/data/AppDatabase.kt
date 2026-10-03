@@ -57,6 +57,9 @@ interface PhotoDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertConfig(entry: KeyValueEntry)
+
+    @Query("DELETE FROM app_config WHERE configKey = :key")
+    suspend fun deleteConfig(key: String)
 }
 
 @Database(entities = [Photo::class, KeyValueEntry::class], version = 3, exportSchema = false)
