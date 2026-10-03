@@ -3808,8 +3808,9 @@ fun PhotoDetailDialog(
                                             Text("Advanced Typography & Text Customization", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                                         Text("Double-tap the text on screen to edit inline or edit below", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.5f))
 
-                                        if (false) // Text Formatting Row (Bold, Italic, Underline, RTL)
-                                        Row(
+                                        if (false) {
+    // Text Formatting Row (Bold, Italic, Underline, RTL)
+                                                                                    Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                                             verticalAlignment = Alignment.CenterVertically
@@ -3866,7 +3867,8 @@ fun PhotoDetailDialog(
                                             }
                                         }
 
-                                        /* if (false) OutlinedTextField(
+                                        
+}/* if (false) OutlinedTextField(
                                             singleLine = true,
                                             shape = RoundedCornerShape(12.dp),
                                             colors = OutlinedTextFieldDefaults.colors(
@@ -4306,8 +4308,8 @@ fun PhotoDetailDialog(
                                          }
 
                                          if (false) {
-                                             // Preselected graphic assets as layering shortcuts
-                                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    // Preselected graphic assets as layering shortcuts
+                                                                                      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                              Text("Or select quick graphic layout presets:", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.6f))
                                              val presets = listOf(
                                                  "https://images.unsplash.com/photo-1541701494587-cb58502866ab" to "Abstract Border",
@@ -4350,7 +4352,8 @@ fun PhotoDetailDialog(
                                                   )
                                                   Spacer(modifier = Modifier.height(8.dp))
                                               }
-                                              /* if (false) {
+                                              
+}/* if (false) {
                                                   val sIdx = activeLayers.indexOfFirst { it.id == selectedLayer.id }
                                                   Column(
                                                       modifier = Modifier
