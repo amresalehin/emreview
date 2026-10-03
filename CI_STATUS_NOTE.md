@@ -1,0 +1,1 @@
+The Android workflow will run on pushes to emreview-dev/main and verify :app:assembleDebug plus unit tests, then upload app-debug.apk.
