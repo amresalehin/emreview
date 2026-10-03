@@ -322,8 +322,8 @@ class GalleryViewModel(application: Application, private val repository: PhotoRe
                     GallerySortOption.DATE_ASC -> list.sortedBy { it.dateAdded }
                     GallerySortOption.TITLE_ASC -> list.sortedBy { it.title.lowercase() }
                     GallerySortOption.TITLE_DESC -> list.sortedByDescending { it.title.lowercase() }
-                    GallerySortOption.SIZE_DESC -> list.sortedByDescending { (it.id * 147 + 1024) % 4500 + 150 }
-                    GallerySortOption.SIZE_ASC -> list.sortedBy { (it.id * 147 + 1024) % 4500 + 150 }
+                    GallerySortOption.SIZE_DESC -> list.sortedByDescending { it.sizeBytes }
+                    GallerySortOption.SIZE_ASC -> list.sortedBy { it.sizeBytes }
                 }
             }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
