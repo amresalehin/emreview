@@ -28,7 +28,10 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.security.MessageDigest
+import com.example.data.VaultPinSecurity
+import com.example.ai.AiProvider
+import com.example.ai.OpenAiCompatibleProvider
+import com.example.ai.VisionModel
 import kotlinx.coroutines.isActive
 
 class GalleryViewModel(application: Application, private val repository: PhotoRepository) : AndroidViewModel(application) {
@@ -353,38 +356,32 @@ class GalleryViewModel(application: Application, private val repository: PhotoRe
         }
     }
 
-    private fun hashPin(pin: String): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        return digest.digest(pin.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-    }
-
     fun setupSecurePin(pin: String) {
-        if (pin.length != 4 || !pin.all { it.isDigit() }) {
+        if (!VaultPinSecurity.validatePin(pin)) {
             _vaultError.value = "PIN must be exactly 4 digits."
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
-            repository.saveSystemConfig("secure_pin", hashPin(pin))
+            repository.saveSystemConfig("secure_pin", VaultPinSecurity.hashForStorage(pin))
             _isPinSetupRequired.value = false
             _isVaultUnlocked.value = true
             _vaultError.value = null
         }
     }
 
-    fun unlockVault(pin: String): Boolean {
-        var success = false
-        viewModelScope.launch {
-            val savedPin = repository.getSystemConfig("secure_pin")
-            if (!savedPin.isNullOrEmpty() && savedPin == hashPin(pin)) {
-                _isVaultUnlocked.value = true
-                _vaultError.value = null
-                success = true
-            } else {
-                _vaultError.value = "Incorrect passcode. Security locked."
-                delay(2000)
-                _vaultError.value = null
+    suspend fun unlockVault(pin: String): Boolean {
+        val savedPin = repository.getSystemConfig("secure_pin")
+        val success = VaultPinSecurity.verify(pin, savedPin)
+        if (success) {
+            _isVaultUnlocked.value = true
+            _vaultError.value = null
+            if (!VaultPinSecurity.isModernRecord(savedPin)) {
+                repository.saveSystemConfig("secure_pin", VaultPinSecurity.hashForStorage(pin))
             }
+        } else {
+            _vaultError.value = "Incorrect passcode. Security locked."
+            delay(2000)
+            _vaultError.value = null
         }
         return success
     }
@@ -724,31 +721,44 @@ class GalleryViewModel(application: Application, private val repository: PhotoRe
         }
     }
 
-    /**
-     * Trigger Live Gemini AI analyze workflow
-     */
-    fun triggerAiTagging(photo: Photo) {
-        if (_isAnalyzing.value != null) return // Already running analysis
-        _isAnalyzing.value = photo.id
+    /** Provider-neutral AI configuration and model discovery. */
+    suspend fun getAiProviderConfig(): AiProviderConfig = AiProviderConfig(
+        repository.getSystemConfig("ai_base_url").orEmpty(),
+        repository.getSystemConfig("ai_api_key").orEmpty(),
+        repository.getSystemConfig("ai_model_id").orEmpty()
+    )
 
+    fun saveAiProviderConfig(baseUrl: String, apiKey: String, modelId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.saveSystemConfig("ai_base_url", baseUrl.trim().trimEnd('/'))
+            repository.saveSystemConfig("ai_api_key", apiKey.trim())
+            repository.saveSystemConfig("ai_model_id", modelId.trim())
+        }
+    }
+
+    suspend fun discoverAiModels(baseUrl: String, apiKey: String): Result<List<VisionModel>> =
+        repository.discoverVisionModels(baseUrl, apiKey)
+
+    private suspend fun configuredAiProvider(): AiProvider? {
+        val config = getAiProviderConfig()
+        return if (config.baseUrl.isNotBlank() && config.apiKey.isNotBlank() && config.modelId.isNotBlank()) {
+            OpenAiCompatibleProvider("custom", "Custom provider", config.baseUrl, config.apiKey, config.modelId)
+        } else null
+    }
+
+    /** Trigger image analysis with the user-configured provider/model. */
+    fun triggerAiTagging(photo: Photo) {
+        if (_isAnalyzing.value != null) return
+        _isAnalyzing.value = photo.id
         viewModelScope.launch {
             try {
-                // Fetch analysis from repository
-                val result = repository.generateTagsWithGemini(photo.imageUrl, photo.title)
-                
-                // Update photo with analyzed parameters
-                val updatedPhoto = photo.copy(
-                    tags = result.tags,
-                    description = result.description
-                )
-                repository.updatePhoto(updatedPhoto)
-                
+                val result = repository.analyzePhoto(getApplication(), photo.imageUrl, photo.title, configuredAiProvider())
+                repository.updatePhoto(photo.copy(tags = result.tags, description = result.description))
                 withContext(Dispatchers.Main) {
-                    val label = if (result.isRealAI) "Gemini Analysis complete!" else "Analyzing offline: Tagged!"
-                    Toast.makeText(getApplication(), label, Toast.LENGTH_SHORT).show()
+                    Toast.makeText(getApplication(), if (result.isRealAI) "AI analysis complete!" else "Offline tagging complete!", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
-                Log.e("GalleryViewModel", "AI tagging worker caught exception", e)
+                Log.e("GalleryViewModel", "AI tagging failed", e)
             } finally {
                 _isAnalyzing.value = null
             }
@@ -2066,3 +2076,5 @@ data class GalleryFilters(
     val sync: SyncFilter = SyncFilter.ALL,
     val selectedCustomLabel: String? = null
 )
+
+data class AiProviderConfig(val baseUrl: String, val apiKey: String, val modelId: String)
