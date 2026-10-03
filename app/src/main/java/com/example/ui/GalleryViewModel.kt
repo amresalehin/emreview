@@ -802,7 +802,7 @@ class GalleryViewModel(application: Application, private val repository: PhotoRe
             )
             val newId = repository.insertPhoto(newPhoto)
             
-            // Automatically launch background Gemini indexing on insert!
+            // Automatically launch background AI indexing on insert.
             val created = newPhoto.copy(id = newId.toInt())
             triggerAiTagging(created)
         }
