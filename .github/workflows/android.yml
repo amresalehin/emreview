@@ -61,10 +61,12 @@ jobs:
             du -h "$apk"
           done
 
-          if find app/build/outputs/apk/release -type f -name '*.apk' -print0 | xargs -0 unzip -l 2>/dev/null | grep -E 'robolectric|robolectric-nativeruntime|sqlite4java|com/ibm/icu|^.*fonts/'; then
-            echo "ERROR: test/runtime resources leaked into the release APK."
-            exit 1
-          fi
+          for apk in "${apks[@]}"; do
+            if unzip -l "$apk" | grep -E 'robolectric|robolectric-nativeruntime|sqlite4java|com/ibm/icu|^.*fonts/'; then
+              echo "ERROR: test/runtime resources leaked into $apk."
+              exit 1
+            fi
+          done
 
           test -s app/build/outputs/bundle/release/app-release.aab
           echo "AAB:"
