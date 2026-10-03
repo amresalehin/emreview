@@ -14,7 +14,6 @@ import com.example.data.Photo
 import com.example.ui.screens.ImageLayerData
 import com.example.ui.screens.deserializeLayers
 import com.example.data.PhotoRepository
-import com.example.data.UnauthorizedException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -29,9 +28,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.data.VaultPinSecurity
-import com.example.ai.AiProvider
-import com.example.ai.OpenAiCompatibleProvider
-import com.example.ai.VisionModel
+import com.amresalehin.emreview.ai.AiProvider
+import com.amresalehin.emreview.ai.OpenAiCompatibleProvider
+import com.amresalehin.emreview.ai.VisionModel
 import kotlinx.coroutines.isActive
 
 class GalleryViewModel(application: Application, private val repository: PhotoRepository) : AndroidViewModel(application) {
