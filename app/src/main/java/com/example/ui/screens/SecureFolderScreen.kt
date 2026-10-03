@@ -49,6 +49,7 @@ fun SecureFolderScreen(
 
     val selectedPhotoIds by viewModel.selectedPhotoIds.collectAsState()
     val isSelectionMode = selectedPhotoIds.isNotEmpty()
+    val coroutineScope = rememberCoroutineScope()
 
     DisposableEffect(Unit) {
         onDispose {
@@ -198,7 +199,7 @@ fun SecureFolderScreen(
                                                             if (isPinSetupRequired) {
                                                                 viewModel.setupSecurePin(enteredPin)
                                                             } else {
-                                                                viewModelScope.launch {
+                                                                coroutineScope.launch {
                                                                     val authed = viewModel.unlockVault(enteredPin)
                                                                     if (!authed) {
                                                                     enteredPin = ""
