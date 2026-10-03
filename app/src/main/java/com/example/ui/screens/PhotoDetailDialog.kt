@@ -3808,64 +3808,6 @@ fun PhotoDetailDialog(
                                             Text("Advanced Typography & Text Customization", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                                         Text("Double-tap the text on screen to edit inline or edit below", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.5f))
 
-                                        if (false) // Text Formatting Row (Bold, Italic, Underline, RTL)
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            IconButton(
-                                                onClick = { watermarkBold = !watermarkBold },
-                                                modifier = Modifier
-                                                    .size(40.dp)
-                                                    .background(if (watermarkBold) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                                            ) {
-                                                Text("B", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold), color = if (watermarkBold) MaterialTheme.colorScheme.onPrimaryContainer else Color.White)
-                                            }
-
-                                            IconButton(
-                                                onClick = { watermarkItalic = !watermarkItalic },
-                                                modifier = Modifier
-                                                    .size(40.dp)
-                                                    .background(if (watermarkItalic) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                                            ) {
-                                                Text("I", style = MaterialTheme.typography.titleMedium.copy(fontStyle = FontStyle.Italic), color = if (watermarkItalic) MaterialTheme.colorScheme.onPrimaryContainer else Color.White)
-                                            }
-
-                                            IconButton(
-                                                onClick = { watermarkUnderline = !watermarkUnderline },
-                                                modifier = Modifier
-                                                    .size(40.dp)
-                                                    .background(if (watermarkUnderline) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                                            ) {
-                                                Text("U", style = MaterialTheme.typography.titleMedium.copy(textDecoration = TextDecoration.Underline), color = if (watermarkUnderline) MaterialTheme.colorScheme.onPrimaryContainer else Color.White)
-                                            }
-
-                                            IconButton(
-                                                onClick = { watermarkRtl = !watermarkRtl },
-                                                modifier = Modifier
-                                                    .size(40.dp)
-                                                    .background(if (watermarkRtl) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                                            ) {
-                                                Text("RTL", style = MaterialTheme.typography.labelSmall, color = if (watermarkRtl) MaterialTheme.colorScheme.onPrimaryContainer else Color.White)
-                                            }
-
-                                            Spacer(modifier = Modifier.weight(1f))
-
-                                            // Text alignment buttons
-                                            val aligns = listOf("left" to "L", "center" to "C", "right" to "R")
-                                            aligns.forEach { (key, label) ->
-                                                IconButton(
-                                                    onClick = { watermarkTextAlign = key },
-                                                    modifier = Modifier
-                                                        .size(36.dp)
-                                                        .background(if (watermarkTextAlign == key) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent, CircleShape)
-                                                ) {
-                                                    Text(label, style = MaterialTheme.typography.bodySmall, color = if (watermarkTextAlign == key) MaterialTheme.colorScheme.onSecondaryContainer else Color.White)
-                                                }
-                                            }
-                                        }
-
                                         /* if (false) OutlinedTextField(
                                             singleLine = true,
                                             shape = RoundedCornerShape(12.dp),
