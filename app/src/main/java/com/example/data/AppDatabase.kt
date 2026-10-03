@@ -9,6 +9,8 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -22,6 +24,12 @@ interface PhotoDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPhoto(photo: Photo): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPhotos(photos: List<Photo>): List<Long>
+
+    @Query("SELECT imageUrl FROM photos")
+    suspend fun getAllPhotoUrls(): List<String>
 
     @Update
     suspend fun updatePhoto(photo: Photo)
@@ -51,14 +59,23 @@ interface PhotoDao {
     suspend fun insertConfig(entry: KeyValueEntry)
 }
 
-@Database(entities = [Photo::class, KeyValueEntry::class], version = 2, exportSchema = false)
+@Database(entities = [Photo::class, KeyValueEntry::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun photoDao(): PhotoDao
 
     companion object {
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE photos ADD COLUMN sizeBytes INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE photos ADD COLUMN width INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE photos ADD COLUMN height INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE photos ADD COLUMN mimeType TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         const val DATABASE_NAME = "emreview.db"
 
         fun build(context: Context): AppDatabase =
-            Room.databaseBuilder(context, AppDatabase::class.java, DATABASE_NAME).build()
+            Room.databaseBuilder(context, AppDatabase::class.java, DATABASE_NAME).addMigrations(MIGRATION_2_3).build()
     }
 }
