@@ -35,12 +35,6 @@ interface PhotoDao {
     @Query("DELETE FROM photos WHERE id = :id")
     suspend fun deletePhotoById(id: Int)
 
-    @Query("DELETE FROM photos WHERE isDeleted = 1 AND deletedTimestamp > 0 AND deletedTimestamp <= :cutoff")
-    suspend fun permanentlyDeleteDeletedBefore(cutoff: Long): Int
-
-    @Query("SELECT * FROM photos WHERE isSynced = 0 AND isDeleted = 0")
-    suspend fun getUnsyncedPhotos(): List<Photo>
-
     @Query("SELECT * FROM app_config WHERE configKey = :key")
     suspend fun getConfig(key: String): KeyValueEntry?
 
