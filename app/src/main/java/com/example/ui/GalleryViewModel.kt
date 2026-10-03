@@ -30,8 +30,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.data.VaultPinSecurity
 import com.example.ai.AiProvider
-import com.amresalehin.emreview.ai.OpenAiCompatibleProvider
-import com.amresalehin.emreview.ai.VisionModel
+import com.example.ai.OpenAiCompatibleProvider
+import com.example.ai.VisionModel
 import kotlinx.coroutines.isActive
 
 class GalleryViewModel(application: Application, private val repository: PhotoRepository) : AndroidViewModel(application) {
