@@ -16,5 +16,9 @@ data class Photo(
     val tags: String = "",          // Comma-separated list of tags
     val isFavorite: Boolean = false,
     val isDeleted: Boolean = false,
-    val deletedTimestamp: Long = 0L
+    val deletedTimestamp: Long = 0L,
+    val sizeBytes: Long = 0L,
+    val width: Int = 0,
+    val height: Int = 0,
+    val mimeType: String = ""
 )
