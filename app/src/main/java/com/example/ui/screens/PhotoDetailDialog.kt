@@ -4247,51 +4247,7 @@ fun PhotoDetailDialog(
                                              Text("Add Image Layer from Local Picker")
                                          }
 
-                                         if (false) // Preselected graphic assets as layering shortcuts
-                                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                             Text("Or select quick graphic layout presets:", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.6f))
-                                             val presets = listOf(
-                                                 "https://images.unsplash.com/photo-1541701494587-cb58502866ab" to "Abstract Border",
-                                                 "https://images.unsplash.com/photo-1550684848-fac1c5b4e853" to "Neon Grid",
-                                                 "https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5" to "Classical Frame",
-                                                 "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe" to "Retro Backdrop"
-                                             )
-                                             Row(
-                                                 modifier = Modifier.horizontalScroll(rememberScrollState()),
-                                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                             ) {
-                                                 presets.forEach { (url, title) ->
-                                                     FilterChip(
-                                                         selected = false,
-                                                         onClick = {
-                                                             activeLayers.add(ImageLayerData(imageUrl = url))
-                                                         },
-                                                         label = { Text(title, color = Color.White) },
-                                                         colors = FilterChipDefaults.filterChipColors(
-                                                             containerColor = Color.White.copy(alpha = 0.1f)
-                                                         ),
-                                                         leadingIcon = { Icon(Icons.Default.Add, null, tint = Color.LightGray, modifier = Modifier.size(12.dp)) }
-                                                     )
-                                                 }
-                                             }
-                                         }
-
-                                         // List of current Layer items with Bring to Front, Send to Back, Delete actions
-                                         if (activeLayers.isNotEmpty()) {
-                                              // Selected Layer Fine-Tuning Controls
-                                              val selectedLayer = activeLayers.find { it.id == activeLayerId }
-                                              if (selectedLayer != null) {
-                                                  val sIdx = activeLayers.indexOfFirst { it.id == selectedLayer.id }
-                                                  SelectedLayerControls(
-                                                      selectedLayer = selectedLayer,
-                                                      sIdx = sIdx,
-                                                      activeLayers = activeLayers,
-                                                      onDeselect = { activeLayerId = null },
-                                                      onActiveLayerIdChanged = { id -> activeLayerId = id }
-                                                  )
-                                                  Spacer(modifier = Modifier.height(8.dp))
-                                              }
-                                              /* if (false) {
+                                         /* if (false) {
                                                   val sIdx = activeLayers.indexOfFirst { it.id == selectedLayer.id }
                                                   Column(
                                                       modifier = Modifier
