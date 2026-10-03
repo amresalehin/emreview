@@ -9,5 +9,5 @@ interface AiProvider {
     suspend fun analyzeImage(bitmap: Bitmap, prompt: String): Result<AiAnalysis>
 }
 
-data class VisionModel(val id: String, val name: String = id)
+data class VisionModel(val id: String, val name: String = id, val capabilityKnown: Boolean = false)
 data class AiAnalysis(val tags: List<String>, val description: String)
