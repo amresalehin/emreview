@@ -202,10 +202,10 @@ fun SecureFolderScreen(
                                                                 coroutineScope.launch {
                                                                     val authed = viewModel.unlockVault(enteredPin)
                                                                     if (!authed) {
-                                                                    enteredPin = ""
+                                                                        enteredPin = ""
                                                                     }
                                                                 }
-                                                            }
+                                                             }
                                                         }
                                                     }
                                                 }
