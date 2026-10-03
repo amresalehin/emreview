@@ -39,8 +39,9 @@ class OpenAiCompatibleProvider(
                     for (i in 0 until data.length()) {
                         val item = data.optJSONObject(i) ?: continue
                         val id = item.optString("id").trim()
-                        if (id.isNotBlank() && looksLikeVisionModel(item)) {
-                            add(VisionModel(id, item.optString("name").ifBlank { id }))
+                        val capability = visionCapability(item)
+                        if (id.isNotBlank() && capability != false) {
+                            add(VisionModel(id, item.optString("name").ifBlank { id }, capabilityKnown = capability == true))
                         }
                     }
                 }.distinctBy { it.id }
@@ -82,10 +83,11 @@ class OpenAiCompatibleProvider(
         .add("Accept", "application/json")
         .build()
 
-    private fun looksLikeVisionModel(item: JSONObject): Boolean {
+    private fun visionCapability(item: JSONObject): Boolean? {
         val capabilities = item.optJSONObject("capabilities")
         if (item.optBoolean("vision", false) || item.optBoolean("multimodal", false) ||
             capabilities?.optBoolean("vision", false) == true) return true
+
         val modalities = item.optJSONArray("modalities") ?: item.optJSONArray("input_modalities")
         if (modalities != null) {
             var hasImage = false
@@ -100,9 +102,9 @@ class OpenAiCompatibleProvider(
             if (hasImage) return true
             if (hasKnownModality) return false
         }
-        // OpenAI-compatible /models responses do not standardize capability metadata.
-        // Keep models with unknown capabilities so custom providers are not silently excluded.
-        return true
+
+        // Unknown is retained for user choice, but is no longer assumed to support vision.
+        return null
     }
     private fun parseAnalysis(body: String): AiAnalysis {
         val root = JSONObject(body)
@@ -124,8 +126,26 @@ class OpenAiCompatibleProvider(
     }
 
     private fun Bitmap.toJpegDataUrl(): String {
-        val out = ByteArrayOutputStream()
-        compress(Bitmap.CompressFormat.JPEG, 72, out)
-        return "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+        val maxDimension = 1536
+        var source = this
+        var resized: Bitmap? = null
+        val largest = maxOf(width, height)
+        if (largest > maxDimension) {
+            val scale = maxDimension.toFloat() / largest.toFloat()
+            resized = Bitmap.createScaledBitmap(
+                this,
+                (width * scale).toInt().coerceAtLeast(1),
+                (height * scale).toInt().coerceAtLeast(1),
+                true
+            )
+            source = resized
+        }
+        return try {
+            val out = ByteArrayOutputStream()
+            source.compress(Bitmap.CompressFormat.JPEG, 72, out)
+            "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+        } finally {
+            resized?.recycle()
+        }
     }
 }
