@@ -83,10 +83,27 @@ class OpenAiCompatibleProvider(
         .build()
 
     private fun looksLikeVisionModel(item: JSONObject): Boolean {
-        val raw = item.toString().lowercase()
-        return listOf("vision", "vl", "multimodal", "image", "llava", "pixtral", "qwen2-vl", "qwen2.5-vl", "qwen3-vl", "gemma-3", "gpt-4o", "gpt-4.1", "gpt-5", "kimi-vl", "internvl").any(raw::contains)
+        val capabilities = item.optJSONObject("capabilities")
+        if (item.optBoolean("vision", false) || item.optBoolean("multimodal", false) ||
+            capabilities?.optBoolean("vision", false) == true) return true
+        val modalities = item.optJSONArray("modalities") ?: item.optJSONArray("input_modalities")
+        if (modalities != null) {
+            var hasImage = false
+            var hasKnownModality = false
+            for (i in 0 until modalities.length()) {
+                val value = modalities.optString(i).lowercase()
+                if (value.isNotBlank()) {
+                    hasKnownModality = true
+                    if (value.contains("image") || value.contains("vision")) hasImage = true
+                }
+            }
+            if (hasImage) return true
+            if (hasKnownModality) return false
+        }
+        // OpenAI-compatible /models responses do not standardize capability metadata.
+        // Keep models with unknown capabilities so custom providers are not silently excluded.
+        return true
     }
-
     private fun parseAnalysis(body: String): AiAnalysis {
         val root = JSONObject(body)
         val raw = root.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.opt("content")
