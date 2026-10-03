@@ -4,8 +4,8 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
 import com.example.ai.AiProvider
-import com.amresalehin.emreview.ai.OpenAiCompatibleProvider
-import com.amresalehin.emreview.ai.VisionModel
+import com.example.ai.OpenAiCompatibleProvider
+import com.example.ai.VisionModel
 import com.example.data.KeyValueEntry
 import com.example.data.PhotoDao
 import com.example.data.Photo
