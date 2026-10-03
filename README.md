@@ -1,11 +1,12 @@
-# EmreView
+# emreview
 
-An Android photo gallery app powered by AI.
-## Features
+Android photo gallery and review app with provider-neutral multimodal AI.
 
-- **AI Labeling** — Gemini automatically tags photos with descriptive labels for fast search and filtering
-- **Secure Folder** — PIN-protected vault for private photos, with PIN stored as a SHA-256 hash
-- **Google Drive Sync** — Back up photos to a chosen Drive folder with automatic retry on token expiry
-- **Trash** — Soft-delete with restore support before permanent removal
-- **Custom Labels** — Create and manage your own photo collections alongside AI-generated ones
-- **Image Layers** — Compose and view layered image edits in the photo detail view
+The app works locally without an AI provider. For AI analysis, configure any OpenAI-compatible vision endpoint with:
+- Base URL
+- API key
+- Vision model ID discovered from the provider's `GET /models` endpoint
+
+Gemini is optional; the application contains no compile-time Gemini API key requirement.
+
+The existing gallery, labels, trash, vault, editor, and Google Drive functionality remain part of the app.
