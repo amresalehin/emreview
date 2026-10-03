@@ -19,7 +19,7 @@ class OpenAiCompatibleProvider(
     override val displayName: String,
     baseUrl: String,
     private val apiKey: String,
-    var selectedModelId: String? = null
+    private val selectedModelId: String? = null
 ) : AiProvider {
     private val baseUrl = baseUrl.trim().trimEnd('/')
     private val client = OkHttpClient.Builder()
@@ -97,7 +97,7 @@ class OpenAiCompatibleProvider(
             }
             else -> ""
         }.trim()
-        val cleaned = text.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val cleaned = text.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
         val json = JSONObject(cleaned)
         val array = json.optJSONArray("tags") ?: JSONArray()
         val tags = buildList {
