@@ -20,6 +20,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URL
+import java.io.File
+import java.io.InputStream
+import okio.BufferedSink
 import java.util.concurrent.TimeUnit
 class PhotoRepository(private val photoDao: PhotoDao) {
 
@@ -57,6 +60,13 @@ class PhotoRepository(private val photoDao: PhotoDao) {
         return photoDao.insertPhoto(photo)
     }
 
+    suspend fun insertPhotos(photos: List<Photo>): List<Long> {
+        if (photos.isEmpty()) return emptyList()
+        return photoDao.insertPhotos(photos)
+    }
+
+    suspend fun getAllPhotoUrls(): List<String> = photoDao.getAllPhotoUrls()
+
     suspend fun updatePhoto(photo: Photo) {
         photoDao.updatePhoto(photo)
     }
@@ -87,35 +97,63 @@ class PhotoRepository(private val photoDao: PhotoDao) {
     }
 
     suspend fun analyzePhoto(context: Context, imageUrl: String, title: String, provider: AiProvider?): TaggingResult {
-        val bitmap = loadBitmap(context, imageUrl) ?: return ruleBasedTagging(title, imageUrl)
-        if (provider == null) return ruleBasedTagging(title, imageUrl)
+        val bitmap = loadSampledBitmap(context, imageUrl, 1536) ?: return ruleBasedTagging(title, imageUrl)
+        if (provider == null) {
+            bitmap.recycle()
+            return ruleBasedTagging(title, imageUrl)
+        }
         val prompt = """Analyze this photo for a personal gallery. Return ONLY JSON:
 {"tags":["tag1","tag2","tag3"],"description":"one concise factual description"}
 Use 3-12 lowercase tags. Do not invent details that are not visible."""
-        return provider.analyzeImage(bitmap, prompt).fold(
-            onSuccess = { a -> TaggingResult(a.tags.distinct().joinToString(", "), a.description, true) },
-            onFailure = { e -> Log.w("PhotoRepository", "AI request failed; using local fallback", e); ruleBasedTagging(title, imageUrl) }
-        )
+        return try {
+            provider.analyzeImage(bitmap, prompt).fold(
+                onSuccess = { a -> TaggingResult(a.tags.distinct().joinToString(", "), a.description, true) },
+                onFailure = { e -> Log.w("PhotoRepository", "AI request failed; using local fallback", e); ruleBasedTagging(title, imageUrl) }
+            )
+        } finally {
+            if (!bitmap.isRecycled) bitmap.recycle()
+        }
     }
 
     suspend fun discoverVisionModels(baseUrl: String, apiKey: String): Result<List<VisionModel>> =
         OpenAiCompatibleProvider("custom", "Custom provider", baseUrl, apiKey).listVisionModels()
 
-    private suspend fun loadBitmap(context: Context, imageUrl: String): Bitmap? = withContext(Dispatchers.IO) {
-        try {
-            when {
-                imageUrl.startsWith("content://") || imageUrl.startsWith("file://") ->
-                    context.contentResolver.openInputStream(Uri.parse(imageUrl))?.use(BitmapFactory::decodeStream)
-                imageUrl.startsWith("http://") || imageUrl.startsWith("https://") ->
-                    URL(imageUrl).openConnection().apply { connectTimeout = 15000; readTimeout = 15000 }
-                        .getInputStream().use(BitmapFactory::decodeStream)
-                else -> BitmapFactory.decodeFile(imageUrl)
+    private suspend fun loadSampledBitmap(context: Context, imageUrl: String, maxDimension: Int): Bitmap? =
+        withContext(Dispatchers.IO) {
+            try {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                openImageStream(context, imageUrl)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
+
+                var sample = 1
+                while ((bounds.outWidth / sample) > maxDimension || (bounds.outHeight / sample) > maxDimension) {
+                    sample *= 2
+                }
+
+                val options = BitmapFactory.Options().apply {
+                    inSampleSize = sample
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+                openImageStream(context, imageUrl)?.use { input ->
+                    BitmapFactory.decodeStream(input, null, options)
+                }
+            } catch (e: Exception) {
+                Log.e("PhotoRepository", "Failed to load sampled bitmap", e)
+                null
             }
-        } catch (e: Exception) {
-            Log.e("PhotoRepository", "Failed to load bitmap", e)
-            null
         }
-    }
+
+    private fun openImageStream(context: Context, imageUrl: String): InputStream? =
+        when {
+            imageUrl.startsWith("content://") || imageUrl.startsWith("file://") ->
+                context.contentResolver.openInputStream(Uri.parse(imageUrl))
+            imageUrl.startsWith("http://") || imageUrl.startsWith("https://") ->
+                (URL(imageUrl).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 15000
+                    readTimeout = 15000
+                }.getInputStream()
+            else -> File(imageUrl).takeIf { it.isFile }?.inputStream()
+        }
 
     private fun ruleBasedTagging(title: String, url: String): TaggingResult {
         val value = "$title $url".lowercase()
@@ -198,10 +236,6 @@ Use 3-12 lowercase tags. Do not invent details that are not visible."""
             val mimeType = if (isVideo) "video/mp4" else "image/jpeg"
             val fileName = if (photo.title.lowercase().endsWith(fileExtension)) photo.title else "${photo.title}$fileExtension"
 
-            val fileBytes = getPhotoBytes(context, photo) ?: run {
-                throw Exception("Could not retrieve file bytes for '${photo.title}' from destination URI/URL")
-            }
-
             val sanitizedTitle = fileName.replace("'", "\\'")
             val query = "name = '$sanitizedTitle' and '$folderId' in parents and trashed = false"
             val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
@@ -235,7 +269,7 @@ Use 3-12 lowercase tags. Do not invent details that are not visible."""
             val requestBody = MultipartBody.Builder()
                 .setType("multipart/related".toMediaType())
                 .addPart(metadata.toRequestBody("application/json; charset=UTF-8".toMediaType()))
-                .addPart(fileBytes.toRequestBody(mimeType.toMediaType()))
+                .addPart(buildStreamingRequestBody(context, photo, mimeType))
                 .build()
 
             val request = Request.Builder()
@@ -262,25 +296,38 @@ Use 3-12 lowercase tags. Do not invent details that are not visible."""
         }
     }
 
-    private suspend fun getPhotoBytes(context: android.content.Context, photo: Photo): ByteArray? = withContext(Dispatchers.IO) {
-        try {
-            if (photo.imageUrl.startsWith("content://")) {
-                context.contentResolver.openInputStream(android.net.Uri.parse(photo.imageUrl))?.use { inputStream ->
-                    return@withContext inputStream.readBytes()
-                }
-            } else if (photo.imageUrl.startsWith("http://") || photo.imageUrl.startsWith("https://")) {
-                val request = Request.Builder().url(photo.imageUrl).build()
-                httpClient.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        return@withContext response.body?.bytes()
-                    }
-                }
+    private fun buildStreamingRequestBody(
+        context: Context,
+        photo: Photo,
+        mimeType: String
+    ): RequestBody {
+        val imageUrl = photo.imageUrl
+        return object : RequestBody() {
+            override fun contentType() = mimeType.toMediaType()
+
+            override fun contentLength(): Long = when {
+                imageUrl.startsWith("content://") || imageUrl.startsWith("file://") ->
+                    runCatching {
+                        context.contentResolver.openAssetFileDescriptor(Uri.parse(imageUrl), "r")
+                            ?.use { it.length } ?: -1L
+                    }.getOrDefault(-1L)
+                imageUrl.startsWith("http://") || imageUrl.startsWith("https://") -> -1L
+                else -> File(imageUrl).takeIf { it.isFile }?.length() ?: -1L
             }
-        } catch (e: Exception) {
-            Log.e("PhotoRepository", "Failed to retrieve bytes for photo ${photo.id}", e)
+
+            override fun writeTo(sink: BufferedSink) {
+                openImageStream(context, imageUrl)?.use { input ->
+                    val buffer = ByteArray(16 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        sink.write(buffer, 0, read)
+                    }
+                } ?: error("Unable to open '${photo.imageUrl}' for upload")
+            }
         }
-        null
     }
+
 }
 
 data class TaggingResult(
