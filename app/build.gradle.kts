@@ -1,5 +1,3 @@
-import java.util.Properties
-
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
@@ -26,6 +24,7 @@ android {
       isMinifyEnabled = true
       isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      signingConfig = signingConfigs.getByName("debug")
     }
   }
 
@@ -34,7 +33,7 @@ android {
       isEnable = true
       reset()
       include("arm64-v8a", "armeabi-v7a", "x86_64")
-      isUniversalApk = true
+      isUniversalApk = false
     }
   }
 
