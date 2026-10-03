@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Card 1: Back tilted blue/teal card (representing background stacking depth) -->
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:rotation="12"
+        android:translateX="4"
+        android:translateY="-2">
+        <!-- Rounded Card Body -->
+        <path
+            android:pathData="M32,32 h40 a6,6 0 0 1 6,6 v40 a6,6 0 0 1 -6,6 h-40 a6,6 0 0 1 -6,-6 v-40 a6,6 0 0 1 6,-6 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:startX="26"
+                    android:startY="32"
+                    android:endX="78"
+                    android:endY="84"
+                    android:type="linear">
+                    <item android:offset="0.0" android:color="#2196F3" /> <!-- Vivid Blue -->
+                    <item android:offset="1.0" android:color="#00BCD4" /> <!-- Vivid Cyan -->
+                </gradient>
+            </aapt:attr>
+        </path>
+    </group>
+
+    <!-- Card 2: Main foreground orange-yellow sunset card (matching Image 2 / Image 6 of attachment) -->
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:rotation="-3"
+        android:translateX="-2"
+        android:translateY="2">
+        <!-- Rounded Card Base Silhouette / Clean Border spacer -->
+        <path
+            android:pathData="M30,30 h42 a8,8 0 0 1 8,8 v42 a8,8 0 0 1 -8,8 h-42 a8,8 0 0 1 -8,-8 v-42 a8,8 0 0 1 8,-8 z"
+            android:fillColor="#FFFFFF" />
+        
+        <!-- Main Card Body Cover -->
+        <path
+            android:pathData="M32,32 h38 a6,6 0 0 1 6,6 v38 a6,6 0 0 1 -6,6 h-38 a6,6 0 0 1 -6,-6 v-38 a6,6 0 0 1 6,-6 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:startX="32"
+                    android:startY="32"
+                    android:endX="76"
+                    android:endY="76"
+                    android:type="linear">
+                    <item android:offset="0.0" android:color="#FF7043" /> <!-- Vivid Coral Orange -->
+                    <item android:offset="1.0" android:color="#FFB300" /> <!-- Sunset Amber Yellow -->
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Elegant Glowing Sun Circle -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M60,44 A5,5 0 1 1 59.99,44 Z" />
+
+        <!-- Mountain Back Peak (Warm Rust tone) -->
+        <path
+            android:pathData="M31,76 L48,52 L62,76 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:startX="31"
+                    android:startY="52"
+                    android:endX="62"
+                    android:endY="76"
+                    android:type="linear">
+                    <item android:offset="0.0" android:color="#D84315" /> <!-- Vintage Rust Red -->
+                    <item android:offset="1.0" android:color="#FF7043" /> <!-- Shimmering Peak -->
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Mountain Front Peak (Rich Crimson Maroon silhouette) -->
+        <path
+            android:pathData="M42,76 L58,48 L73,76 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:startX="42"
+                    android:startY="48"
+                    android:endX="73"
+                    android:endY="76"
+                    android:type="linear">
+                    <item android:offset="0.0" android:color="#BF360C" /> <!-- Crimson Shade -->
+                    <item android:offset="1.0" android:color="#E64A19" /> <!-- Bright Terracotta -->
+                </gradient>
+            </aapt:attr>
+        </path>
+    </group>
+
+    <!-- Artistic Magic Flare particles / Sparkles around the Gallery design -->
+    <path
+        android:fillColor="#FFEA00"
+        android:pathData="M16,28 L18,31 L21,32 L18,33 L16,36 L14,33 L11,32 L14,31 Z" />
+    <path
+        android:fillColor="#AEEA00"
+        android:pathData="M88,72 L89.5,74.5 L92,75 L89.5,75.5 L88,78 L86.5,75.5 L84,75 L86.5,74.5 Z" />
+
+</vector>
