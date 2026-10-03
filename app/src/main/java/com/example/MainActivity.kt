@@ -50,11 +50,7 @@ class MainActivity : ComponentActivity() {
 
     // Lazy initialization of Database and Repository as a clean singleton-like pattern
     private val database by lazy {
-        Room.databaseBuilder(
-            applicationContext,
-            AppDatabase::class.java,
-            "emreview.db"
-        ).fallbackToDestructiveMigration().build()
+        AppDatabase.build(applicationContext)
     }
 
     private val repository by lazy {
