@@ -1437,7 +1437,7 @@ fun GalleryScreen(
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = "${(detailPhoto.id * 147 + 1024) % 3200 + 400} KB",
+                                    text = formatFileSize(detailPhoto.sizeBytes),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
@@ -1451,7 +1451,7 @@ fun GalleryScreen(
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = if (detailPhoto.tags.contains("video", ignoreCase = true)) "1920x1080 (HD)" else "4032x3024 (12MP)",
+                                    text = if (detailPhoto.width > 0 && detailPhoto.height > 0) "${detailPhoto.width}x${detailPhoto.height}" else "Unknown",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
@@ -1468,7 +1468,7 @@ fun GalleryScreen(
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = if (detailPhoto.tags.contains("video", ignoreCase = true)) "video/mp4" else "image/jpeg",
+                                    text = detailPhoto.mimeType.ifBlank { if (detailPhoto.tags.contains("video", ignoreCase = true)) "video/*" else "image/*" },
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
@@ -2104,4 +2104,13 @@ private fun SelectionActionBarItem(
             maxLines = 1
         )
     }
+}
+
+
+private fun formatFileSize(bytes: Long): String = when {
+    bytes <= 0L -> "Unknown"
+    bytes < 1024L -> "$bytes B"
+    bytes < 1024L * 1024L -> String.format(Locale.getDefault(), "%.1f KB", bytes / 1024.0)
+    bytes < 1024L * 1024L * 1024L -> String.format(Locale.getDefault(), "%.1f MB", bytes / (1024.0 * 1024.0))
+    else -> String.format(Locale.getDefault(), "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
 }
