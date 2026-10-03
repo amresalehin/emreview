@@ -56,7 +56,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun photoDao(): PhotoDao
 
     companion object {
-        const val DATABASE_NAME = "smart_gallery_vault.db"
+        const val DATABASE_NAME = "emreview.db"
 
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, DATABASE_NAME).build()
