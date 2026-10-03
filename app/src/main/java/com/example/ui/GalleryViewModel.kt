@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.ContentUris
 import android.net.Uri
@@ -250,7 +251,7 @@ class GalleryViewModel(application: Application, private val repository: PhotoRe
             repository.saveSystemConfig("gdrive_selected_folder", "")
             if (!tokenToClear.isNullOrBlank()) {
                 try {
-                    GoogleAuthUtil.invalidateToken(getApplication(), tokenToClear)
+                    invalidateGoogleToken(getApplication(), tokenToClear)
                 } catch (e: Exception) {
                     Log.w("GalleryViewModel", "Failed to invalidate token on logout", e)
                 }
