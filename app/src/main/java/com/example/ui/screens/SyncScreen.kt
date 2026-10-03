@@ -185,6 +185,54 @@ fun SyncScreen(
         }
     }
 
+    var aiBaseUrl by remember { mutableStateOf("") }
+    var aiApiKey by remember { mutableStateOf("") }
+    var aiModelId by remember { mutableStateOf("") }
+    var aiModels by remember { mutableStateOf<List<String>>(emptyList()) }
+    var aiStatus by remember { mutableStateOf("") }
+    var aiLoading by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val cfg = viewModel.getAiProviderConfig()
+        aiBaseUrl = cfg.baseUrl
+        aiApiKey = cfg.apiKey
+        aiModelId = cfg.modelId
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("ai_provider_card"),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("AI VISION PROVIDER", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
+            Text("Use any OpenAI-compatible vision endpoint. Gemini is optional, not required.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedTextField(value = aiBaseUrl, onValueChange = { aiBaseUrl = it }, label = { Text("Base URL") }, placeholder = { Text("https://api.example.com/v1") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("ai_base_url"))
+            OutlinedTextField(value = aiApiKey, onValueChange = { aiApiKey = it }, label = { Text("API key") }, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth().testTag("ai_api_key"))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = {
+                    if (aiBaseUrl.isBlank()) aiStatus = "Enter a base URL first." else {
+                        aiLoading = true
+                        aiStatus = "Discovering vision-capable models..."
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                            viewModel.discoverAiModels(aiBaseUrl, aiApiKey).fold(
+                                onSuccess = { found ->
+                                    aiModels = found.map { it.id }
+                                    aiModelId = aiModels.firstOrNull() ?: aiModelId
+                                    aiStatus = "Found ${aiModels.size} vision-capable models."
+                                },
+                                onFailure = { error -> aiStatus = error.message ?: "Model discovery failed." }
+                            )
+                            aiLoading = false
+                        }
+                    }
+                }, enabled = !aiLoading, modifier = Modifier.weight(1f)) { Text(if (aiLoading) "Discovering..." else "Fetch Models") }
+                OutlinedButton(onClick = { viewModel.saveAiProviderConfig(aiBaseUrl, aiApiKey, aiModelId); aiStatus = "AI provider settings saved." }, enabled = aiModelId.isNotBlank(), modifier = Modifier.weight(1f)) { Text("Save") }
+            }
+            OutlinedTextField(value = aiModelId, onValueChange = { aiModelId = it }, label = { Text("Vision model ID") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("ai_model_id"))
+            if (aiStatus.isNotBlank()) Text(aiStatus, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
     Box(
         modifier = modifier
             .fillMaxSize()
