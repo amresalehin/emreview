@@ -30,35 +30,51 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Check project
+      - name: Lint and unit tests
         run: ./gradlew --no-daemon --stacktrace lintDebug testDebugUnitTest
 
-      - name: Build optimized release APKs
-        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
+      - name: Build optimized signed release APKs and AAB
+        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease :app:bundleRelease
 
-      - name: Verify APKs and print sizes
+      - name: Verify release artifacts
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
+
           apks=(app/build/outputs/apk/release/*.apk)
           test "${#apks[@]}" -gt 0
+
+          apksigner_path=""
+          while IFS= read -r candidate; do
+            apksigner_path="$candidate"
+            break
+          done < <(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V)
+
+          test -n "$apksigner_path"
+
           for apk in "${apks[@]}"; do
-            echo "=== ${apk} ==="
-            test -s "${apk}"
-            unzip -t "${apk}" >/dev/null
-            file "${apk}"
-            du -h "${apk}"
+            echo "=== $apk ==="
+            test -s "$apk"
+            unzip -t "$apk" >/dev/null
+            "$apksigner_path" verify --verbose "$apk"
+            du -h "$apk"
           done
 
-          if find app/build/outputs/apk/release -type f -name '*.apk' -print0 | xargs -0 unzip -l 2>/dev/null | grep -E 'robolectric|robolectric-nativeruntime|sqlite4java|com/ibm/icu|fonts/'; then
+          if find app/build/outputs/apk/release -type f -name '*.apk' -print0 | xargs -0 unzip -l 2>/dev/null | grep -E 'robolectric|robolectric-nativeruntime|sqlite4java|com/ibm/icu|^.*fonts/'; then
             echo "ERROR: test/runtime resources leaked into the release APK."
             exit 1
           fi
 
-      - name: Upload optimized release APKs
+          test -s app/build/outputs/bundle/release/app-release.aab
+          echo "AAB:"
+          du -h app/build/outputs/bundle/release/app-release.aab
+
+      - name: Upload optimized release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: emreview-release-apks
-          path: app/build/outputs/apk/release/*.apk
+          name: emreview-release
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: error
