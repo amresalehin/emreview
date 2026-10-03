@@ -14,6 +14,7 @@ import com.example.data.Photo
 import com.example.ui.screens.ImageLayerData
 import com.example.ui.screens.deserializeLayers
 import com.example.data.PhotoRepository
+import com.example.data.UnauthorizedException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -2078,4 +2079,3 @@ data class GalleryFilters(
 
 data class AiProviderConfig(val baseUrl: String, val apiKey: String, val modelId: String)
 
-class UnauthorizedException(message: String, cause: Throwable? = null) : Exception(message, cause)
