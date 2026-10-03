@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
         Room.databaseBuilder(
             applicationContext,
             AppDatabase::class.java,
-            "smart_gallery_vault.db"
+            "emreview.db"
         ).fallbackToDestructiveMigration().build()
     }
 
