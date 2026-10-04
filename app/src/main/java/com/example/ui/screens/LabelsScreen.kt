@@ -1,18 +1,22 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -26,7 +30,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -36,7 +39,20 @@ import coil.request.ImageRequest
 import com.example.data.Photo
 import com.example.ui.GalleryViewModel
 
-@OptIn(ExperimentalLayoutApi::class)
+enum class AlbumSortOption(val displayName: String) {
+    SMART_FIRST("Smart First"),
+    NAME_ASC("Name (A–Z)"),
+    NAME_DESC("Name (Z–A)"),
+    COUNT_DESC("Most Photos"),
+    COUNT_ASC("Fewest Photos")
+}
+
+enum class AlbumViewMode {
+    GRID,
+    LIST
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LabelsScreen(
     viewModel: GalleryViewModel,
@@ -47,278 +63,536 @@ fun LabelsScreen(
     val allPhotos by viewModel.allPhotos.collectAsState()
     val publicPhotos = remember(allPhotos) { allPhotos.filter { !it.isLocked && !it.isDeleted } }
 
+    val isAiUpdatingAlbums by viewModel.isAiUpdatingAlbums.collectAsState()
+    val aiAlbumProgress by viewModel.aiAlbumProgress.collectAsState()
+    val aiAlbumStatus by viewModel.aiAlbumStatus.collectAsState()
+    val autoAssignAlbumsOnAi by viewModel.autoAssignAlbumsOnAi.collectAsState()
+
+    var searchQuery by remember { mutableStateOf("") }
+    var sortOption by remember { mutableStateOf(AlbumSortOption.SMART_FIRST) }
+    var viewMode by remember { mutableStateOf(AlbumViewMode.GRID) }
+    var showSortMenu by remember { mutableStateOf(false) }
+
+    var showCreateDialog by remember { mutableStateOf(false) }
     var newLabelName by remember { mutableStateOf("") }
+    var showAiOptions by remember { mutableStateOf(false) }
+
     var activeEditingLabel by remember { mutableStateOf<String?>(null) }
     var showManageDialog by remember { mutableStateOf(false) }
-
-    // State for selected photos currently inside the manage dialog
     var selectedPhotoIdsForActiveLabel by remember { mutableStateOf(setOf<Int>()) }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        // 1. Title Header following Google Photos material guides
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.Folder,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp)
+    // Filter and Sort Albums
+    val filteredAndSortedLabels = remember(customLabels, publicPhotos, searchQuery, sortOption) {
+        val filtered = customLabels.filter { label ->
+            if (searchQuery.isBlank()) true
+            else label.contains(searchQuery.trim(), ignoreCase = true)
+        }
+
+        when (sortOption) {
+            AlbumSortOption.SMART_FIRST -> filtered.sortedWith(
+                compareByDescending<String> { GalleryViewModel.SMART_ALBUM_CATEGORIES.containsKey(it) }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it }
             )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(
-                    text = "Custom Collections",
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        letterSpacing = (-0.5).sp
-                    )
-                )
-                Text(
-                    text = "Organize assets into custom preference albums",
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                )
+            AlbumSortOption.NAME_ASC -> filtered.sortedWith(String.CASE_INSENSITIVE_ORDER)
+            AlbumSortOption.NAME_DESC -> filtered.sortedWith(String.CASE_INSENSITIVE_ORDER.reversed())
+            AlbumSortOption.COUNT_DESC -> filtered.sortedByDescending { label ->
+                publicPhotos.count { viewModel.containsCustomLabelTag(it, label) }
+            }
+            AlbumSortOption.COUNT_ASC -> filtered.sortedBy { label ->
+                publicPhotos.count { viewModel.containsCustomLabelTag(it, label) }
             }
         }
+    }
 
-        // 2. Add Label Input Lounge (Beautiful filled style)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            ),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = {
+                    newLabelName = ""
+                    showCreateDialog = true
+                },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.testTag("btn_create_album_fab")
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Create Album")
+            }
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Create Custom Folder",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = newLabelName,
-                        onValueChange = { newLabelName = it },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("input_new_label_name"),
-                        placeholder = { Text("e.g. Travel, Family Dinner") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surface,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                        )
-                    )
-                    Button(
-                        onClick = {
-                            if (newLabelName.isNotBlank()) {
-                                viewModel.createLabel(newLabelName)
-                                newLabelName = ""
-                            }
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.testTag("btn_create_label")
-                    ) {
-                        Icon(Icons.Default.Add, "Add")
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Create")
-                    }
-                }
-            }
-        }
-
-        // 3. Grid list of current Custom Folders/Groups
-        if (customLabels.isEmpty()) {
-            Box(
+            // 1. Sleek Search Box and Action Toolbar (Search, Sort, View Mode, AI Smart)
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 40.dp),
-                contentAlignment = Alignment.Center
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                TextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(52.dp)
+                        .testTag("album_search_input"),
+                    placeholder = {
+                        Text(
+                            text = "Search albums",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Clear",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    },
+                    shape = CircleShape,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent
+                    ),
+                    singleLine = true
+                )
+
+                // Sort Dropdown Menu
+                Box {
+                    IconButton(
+                        onClick = { showSortMenu = true },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                            .testTag("album_sort_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Sort,
+                            contentDescription = "Sort Albums",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = showSortMenu,
+                        onDismissRequest = { showSortMenu = false },
+                        modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                    ) {
+                        AlbumSortOption.values().forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option.displayName) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = if (sortOption == option) Icons.Default.Check else Icons.Default.Sort,
+                                        contentDescription = null,
+                                        tint = if (sortOption == option) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                },
+                                onClick = {
+                                    sortOption = option
+                                    showSortMenu = false
+                                },
+                                modifier = Modifier.testTag("album_sort_option_${option.name.lowercase()}")
+                            )
+                        }
+                    }
+                }
+
+                // View Mode Toggle (Grid/List)
+                IconButton(
+                    onClick = {
+                        viewMode = if (viewMode == AlbumViewMode.GRID) AlbumViewMode.LIST else AlbumViewMode.GRID
+                    },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                        .testTag("album_view_toggle")
+                ) {
                     Icon(
-                        imageVector = Icons.Default.FolderOpen,
-                        contentDescription = null,
-                        modifier = Modifier.size(56.dp),
-                        tint = MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f)
+                        imageVector = if (viewMode == AlbumViewMode.GRID) Icons.Default.ViewList else Icons.Default.GridView,
+                        contentDescription = "Toggle View Mode",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "No custom collections yet.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                }
+
+                // AI Smart Albums Button / Toggle
+                IconButton(
+                    onClick = { showAiOptions = !showAiOptions },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(
+                            if (showAiOptions || isAiUpdatingAlbums) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                            CircleShape
+                        )
+                        .testTag("album_ai_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = "AI Smart Albums",
+                        tint = if (showAiOptions || isAiUpdatingAlbums) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
-        } else {
-            // Display folders list
-            customLabels.forEach { labelName ->
-                // Calculate count of photos belonging to this custom label
-                val count = publicPhotos.count { viewModel.containsCustomLabelTag(it, labelName) }
-                val previews = publicPhotos.filter { viewModel.containsCustomLabelTag(it, labelName) }.take(3)
 
+            // 2. Compact Collapsible AI Smart Albums Card
+            AnimatedVisibility(
+                visible = showAiOptions || isAiUpdatingAlbums,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("custom_label_card_$labelName"),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                        .testTag("ai_smart_albums_hero_card"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        // Card Title & Actions
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.primaryContainer),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Folder,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Column {
-                                    Text(
-                                        text = labelName,
-                                        style = MaterialTheme.typography.titleMedium.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                    )
-                                    Text(
-                                        text = "$count custom photos",
-                                        style = MaterialTheme.typography.bodySmall.copy(
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    )
-                                }
-                            }
-
-                            // Delete button
-                            IconButton(
-                                onClick = { viewModel.deleteLabel(labelName) },
-                                modifier = Modifier.testTag("btn_delete_label_$labelName")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.DeleteOutline,
-                                    contentDescription = "Delete Folder",
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            }
-                        }
-
-                        // Previews stack row if not empty
-                        if (previews.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(12.dp))
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                previews.forEach { photo ->
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(70.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
-                                    ) {
-                                        AsyncImage(
-                                            model = ImageRequest.Builder(LocalContext.current)
-                                                .data(photo.imageUrl)
-                                                .crossfade(true)
-                                                .build(),
-                                            contentDescription = photo.title,
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentScale = ContentScale.Crop
-                                        )
-                                    }
-                                }
-                                // Fill out empty blocks if less than 3
-                                repeat(3 - previews.size) {
-                                    Spacer(modifier = Modifier.weight(1f))
-                                }
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = "AI Smart Albums",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { showAiOptions = false },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = "Close", modifier = Modifier.size(16.dp))
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Control Buttons
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            // View photos stream button
-                            Button(
-                                onClick = { onNavigateToBrowseWithFilter(labelName) },
-                                shape = RoundedCornerShape(10.dp),
+                        if (isAiUpdatingAlbums) {
+                            val progressFraction = if (aiAlbumProgress.second > 0) {
+                                aiAlbumProgress.first.toFloat() / aiAlbumProgress.second.toFloat()
+                            } else 0f
+                            LinearProgressIndicator(
+                                progress = { progressFraction },
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("btn_view_album_$labelName"),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(CircleShape),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = aiAlbumStatus ?: "Organizing photos...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
-                            ) {
-                                Icon(Icons.Default.RemoveRedEye, null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("View Album")
+                                TextButton(
+                                    onClick = { viewModel.cancelAiAlbumUpdate() },
+                                    modifier = Modifier
+                                        .height(28.dp)
+                                        .testTag("btn_cancel_ai_albums")
+                                ) {
+                                    Text("Cancel", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                                }
                             }
-
-                            // Select photos to put inside folder button
-                            OutlinedButton(
-                                onClick = {
-                                    activeEditingLabel = labelName
-                                    // Pre-populate with currently selected photo IDs
-                                    selectedPhotoIdsForActiveLabel = publicPhotos
-                                        .filter { viewModel.containsCustomLabelTag(it, labelName) }
-                                        .map { it.id }
-                                        .toSet()
-                                    showManageDialog = true
-                                },
-                                shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("btn_manage_photos_$labelName")
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.Collections, null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Select Photos")
+                                Button(
+                                    onClick = { viewModel.autoUpdateAlbumsWithAi() },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    modifier = Modifier.testTag("btn_ai_auto_update_albums"),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Auto-Update Albums", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = "Auto-assign",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Switch(
+                                        checked = autoAssignAlbumsOnAi,
+                                        onCheckedChange = { viewModel.setAutoAssignAlbumsOnAi(it) },
+                                        modifier = Modifier.testTag("switch_auto_assign_albums")
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
+
+            // 3. Album Count Header & Actions
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "${filteredAndSortedLabels.size} Albums",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (searchQuery.isNotBlank()) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ) {
+                            Text(
+                                text = "filtered",
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+
+                TextButton(
+                    onClick = {
+                        newLabelName = ""
+                        showCreateDialog = true
+                    },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.testTag("btn_open_create_dialog")
+                ) {
+                    Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("New Album", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                }
+            }
+
+            // 4. Content: Grid or List
+            if (filteredAndSortedLabels.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.FolderOpen,
+                            contentDescription = null,
+                            modifier = Modifier.size(56.dp),
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = if (searchQuery.isNotBlank()) "No albums matching \"$searchQuery\"" else "No albums created yet",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = if (searchQuery.isNotBlank()) "Try checking the spelling or clear search" else "Create a custom album or let AI auto-generate them",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                if (searchQuery.isNotBlank()) searchQuery = ""
+                                else {
+                                    newLabelName = ""
+                                    showCreateDialog = true
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(if (searchQuery.isNotBlank()) "Clear Search" else "Create Album")
+                        }
+                    }
+                }
+            } else if (viewMode == AlbumViewMode.GRID) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("albums_grid")
+                ) {
+                    items(filteredAndSortedLabels, key = { it }) { labelName ->
+                        val albumPhotos = remember(publicPhotos, labelName) {
+                            publicPhotos.filter { viewModel.containsCustomLabelTag(it, labelName) }
+                        }
+                        val count = albumPhotos.size
+                        val coverPhoto = albumPhotos.firstOrNull()
+                        val isSmart = GalleryViewModel.SMART_ALBUM_CATEGORIES.containsKey(labelName)
+
+                        AlbumGridCard(
+                            labelName = labelName,
+                            count = count,
+                            coverPhoto = coverPhoto,
+                            isSmart = isSmart,
+                            onOpen = { onNavigateToBrowseWithFilter(labelName) },
+                            onManage = {
+                                activeEditingLabel = labelName
+                                selectedPhotoIdsForActiveLabel = albumPhotos.map { it.id }.toSet()
+                                showManageDialog = true
+                            },
+                            onDelete = { viewModel.deleteLabel(labelName) }
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("albums_list")
+                ) {
+                    items(filteredAndSortedLabels, key = { it }) { labelName ->
+                        val albumPhotos = remember(publicPhotos, labelName) {
+                            publicPhotos.filter { viewModel.containsCustomLabelTag(it, labelName) }
+                        }
+                        val count = albumPhotos.size
+                        val coverPhoto = albumPhotos.firstOrNull()
+                        val isSmart = GalleryViewModel.SMART_ALBUM_CATEGORIES.containsKey(labelName)
+
+                        AlbumListCard(
+                            labelName = labelName,
+                            count = count,
+                            coverPhoto = coverPhoto,
+                            isSmart = isSmart,
+                            onOpen = { onNavigateToBrowseWithFilter(labelName) },
+                            onManage = {
+                                activeEditingLabel = labelName
+                                selectedPhotoIdsForActiveLabel = albumPhotos.map { it.id }.toSet()
+                                showManageDialog = true
+                            },
+                            onDelete = { viewModel.deleteLabel(labelName) }
+                        )
+                    }
+                }
+            }
         }
+    }
+
+    // Create New Album Dialog
+    if (showCreateDialog) {
+        AlertDialog(
+            onDismissRequest = { showCreateDialog = false },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text("Create New Album", fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Enter a name for your custom album collection:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = newLabelName,
+                        onValueChange = { newLabelName = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("input_new_label_name"),
+                        placeholder = { Text("e.g. Travel, Family, Roadtrip") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newLabelName.isNotBlank()) {
+                            viewModel.createLabel(newLabelName)
+                            newLabelName = ""
+                            showCreateDialog = false
+                        }
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("btn_create_label")
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     // High fidelity overlay dialog to manage photo multi-selection group mapping
@@ -346,7 +620,7 @@ fun LabelsScreen(
                     ) {
                         Column {
                             Text(
-                                text = "Group Photos",
+                                text = "Manage Album",
                                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
@@ -394,7 +668,6 @@ fun LabelsScreen(
                                             }
                                         }
                                 ) {
-                                    // Thumbnail AsyncImage
                                     AsyncImage(
                                         model = ImageRequest.Builder(LocalContext.current)
                                             .data(photo.imageUrl)
@@ -405,7 +678,6 @@ fun LabelsScreen(
                                         contentScale = ContentScale.Crop
                                     )
 
-                                    // Gradient mask
                                     Box(
                                         modifier = Modifier
                                             .fillMaxSize()
@@ -416,7 +688,6 @@ fun LabelsScreen(
                                             )
                                     )
 
-                                    // Checkbox/Visual selection tag overlay
                                     Checkbox(
                                         checked = isChecked,
                                         onCheckedChange = { checked ->
@@ -441,7 +712,6 @@ fun LabelsScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Dialog Actions
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
@@ -459,9 +729,315 @@ fun LabelsScreen(
                             modifier = Modifier.testTag("btn_save_group_photos"),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Text("Save Grouping")
+                            Text("Save Changes")
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AlbumGridCard(
+    labelName: String,
+    count: Int,
+    coverPhoto: Photo?,
+    isSmart: Boolean,
+    onOpen: () -> Unit,
+    onManage: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        onClick = onOpen,
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("custom_label_card_$labelName"),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column {
+            // Cover Image Box
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1.15f)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                if (coverPhoto != null) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(coverPhoto.imageUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = labelName,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        MaterialTheme.colorScheme.primaryContainer,
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                    )
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                            modifier = Modifier.size(44.dp)
+                        )
+                    }
+                }
+
+                // Top badges row (Smart indicator & count)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isSmart) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        ) {
+                            Text(
+                                text = "✨ AI",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.size(1.dp))
+                    }
+
+                    Surface(
+                        shape = CircleShape,
+                        color = Color.Black.copy(alpha = 0.6f),
+                        contentColor = Color.White
+                    ) {
+                        Text(
+                            text = "$count",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            // Info and actions
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(10.dp)
+            ) {
+                Text(
+                    text = labelName,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "$count photos",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilledTonalButton(
+                        onClick = onOpen,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                            .testTag("btn_view_album_$labelName"),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text("View", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+
+                    IconButton(
+                        onClick = onManage,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .testTag("btn_manage_photos_$labelName")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Collections,
+                            contentDescription = "Manage Photos",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .testTag("btn_delete_label_$labelName")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteOutline,
+                            contentDescription = "Delete Album",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AlbumListCard(
+    labelName: String,
+    count: Int,
+    coverPhoto: Photo?,
+    isSmart: Boolean,
+    onOpen: () -> Unit,
+    onManage: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        onClick = onOpen,
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("custom_label_card_$labelName"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Thumbnail
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (coverPhoto != null) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(coverPhoto.imageUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = labelName,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+
+            // Title and Details
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = labelName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (isSmart) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ) {
+                            Text(
+                                text = "✨ AI Smart",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                }
+                Text(
+                    text = "$count photos",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Actions
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = onOpen,
+                    modifier = Modifier.testTag("btn_view_album_$labelName")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowForward,
+                        contentDescription = "Open Album",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                IconButton(
+                    onClick = onManage,
+                    modifier = Modifier.testTag("btn_manage_photos_$labelName")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Collections,
+                        contentDescription = "Manage Photos",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.testTag("btn_delete_label_$labelName")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteOutline,
+                        contentDescription = "Delete Album",
+                        tint = MaterialTheme.colorScheme.error
+                    )
                 }
             }
         }

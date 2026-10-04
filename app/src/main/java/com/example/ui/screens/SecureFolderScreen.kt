@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -41,8 +42,11 @@ import com.example.ui.GalleryViewModel
 fun SecureFolderScreen(
     viewModel: GalleryViewModel,
     modifier: Modifier = Modifier,
-    onNavigateToDetail: (Photo) -> Unit
+    onNavigateToDetail: (Photo) -> Unit,
+    onBack: () -> Unit = {}
 ) {
+    BackHandler { onBack() }
+
     val isVaultUnlocked by viewModel.isVaultUnlocked.collectAsState()
     val isPinSetupRequired by viewModel.isPinSetupRequired.collectAsState()
     val lockedPhotos by viewModel.lockedPhotos.collectAsState()
@@ -66,6 +70,20 @@ fun SecureFolderScreen(
             .background(MaterialTheme.colorScheme.background)
     ) {
         if (!isVaultUnlocked) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp)
+                    .testTag("secure_folder_back_btn")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ArrowBack,
+                    contentDescription = "Back to Gallery",
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
             // Render High Fidelity passcode lock keypad screen
             Column(
                 modifier = Modifier
@@ -257,6 +275,17 @@ fun SecureFolderScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.testTag("secure_folder_unlocked_back_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowBack,
+                                contentDescription = "Back to Gallery",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
                         Icon(
                             imageVector = Icons.Default.LockOpen,
                             contentDescription = "Decrypted",

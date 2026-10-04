@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -40,6 +41,7 @@ import com.example.ui.screens.LabelsScreen
 import com.example.ui.screens.PhotoDetailDialog
 import com.example.ui.screens.SecureFolderScreen
 import com.example.ui.screens.SyncScreen
+import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.TrashScreen
 import com.example.ui.theme.MyApplicationTheme
 import android.widget.Toast
@@ -164,7 +166,7 @@ class MainActivity : ComponentActivity() {
                                 NavigationBarItem(
                                     selected = currentTab == GalleryTab.BROWSE,
                                     onClick = { currentTab = GalleryTab.BROWSE },
-                                    icon = { Icon(Icons.Default.Home, contentDescription = "Home Gallery Store") },
+                                    icon = { Icon(Icons.Default.Home, contentDescription = "Home Gallery Stream") },
                                     label = { Text("Stream", fontWeight = FontWeight.Bold) },
                                     modifier = Modifier.testTag("nav_btn_browse")
                                 )
@@ -176,25 +178,11 @@ class MainActivity : ComponentActivity() {
                                     modifier = Modifier.testTag("nav_btn_labels")
                                 )
                                 NavigationBarItem(
-                                    selected = currentTab == GalleryTab.SYNC,
-                                    onClick = { currentTab = GalleryTab.SYNC },
-                                    icon = { Icon(Icons.Default.CloudSync, contentDescription = "Cloud Dashboard Console") },
-                                    label = { Text("Cloud", fontWeight = FontWeight.Bold) },
-                                    modifier = Modifier.testTag("nav_btn_sync")
-                                )
-                                NavigationBarItem(
-                                    selected = currentTab == GalleryTab.TRASH,
-                                    onClick = { currentTab = GalleryTab.TRASH },
-                                    icon = { Icon(Icons.Default.Delete, contentDescription = "Recently Deleted recycle bin") },
-                                    label = { Text("Trash", fontWeight = FontWeight.Bold) },
-                                    modifier = Modifier.testTag("nav_btn_trash")
-                                )
-                                NavigationBarItem(
-                                    selected = currentTab == GalleryTab.SECURE,
-                                    onClick = { currentTab = GalleryTab.SECURE },
-                                    icon = { Icon(Icons.Default.Lock, contentDescription = "Encrypted biometric lockbox") },
-                                    label = { Text("Vault", fontWeight = FontWeight.Bold) },
-                                    modifier = Modifier.testTag("nav_btn_secure")
+                                    selected = currentTab == GalleryTab.SETTINGS || currentTab == GalleryTab.SYNC,
+                                    onClick = { currentTab = GalleryTab.SETTINGS },
+                                    icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                                    label = { Text("Settings", fontWeight = FontWeight.Bold) },
+                                    modifier = Modifier.testTag("nav_btn_settings")
                                 )
                             }
                         }
@@ -237,25 +225,11 @@ class MainActivity : ComponentActivity() {
                                     modifier = Modifier.testTag("nav_btn_labels_rail")
                                 )
                                 NavigationRailItem(
-                                    selected = currentTab == GalleryTab.SYNC,
-                                    onClick = { currentTab = GalleryTab.SYNC },
-                                    icon = { Icon(Icons.Default.CloudSync, contentDescription = "Cloud Setup") },
-                                    label = { Text("Cloud") },
-                                    modifier = Modifier.testTag("nav_btn_sync_rail")
-                                )
-                                NavigationRailItem(
-                                    selected = currentTab == GalleryTab.TRASH,
-                                    onClick = { currentTab = GalleryTab.TRASH },
-                                    icon = { Icon(Icons.Default.Delete, contentDescription = "Recycle Bin") },
-                                    label = { Text("Trash") },
-                                    modifier = Modifier.testTag("nav_btn_trash_rail")
-                                )
-                                NavigationRailItem(
-                                    selected = currentTab == GalleryTab.SECURE,
-                                    onClick = { currentTab = GalleryTab.SECURE },
-                                    icon = { Icon(Icons.Default.Lock, contentDescription = "Private Safe") },
-                                    label = { Text("Vault") },
-                                    modifier = Modifier.testTag("nav_btn_secure_rail")
+                                    selected = currentTab == GalleryTab.SETTINGS || currentTab == GalleryTab.SYNC,
+                                    onClick = { currentTab = GalleryTab.SETTINGS },
+                                    icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                                    label = { Text("Settings") },
+                                    modifier = Modifier.testTag("nav_btn_settings_rail")
                                 )
                                 Spacer(modifier = Modifier.weight(1f))
                             }
@@ -272,7 +246,9 @@ class MainActivity : ComponentActivity() {
                                     GalleryScreen(
                                         viewModel = viewModel,
                                         onNavigateToDetail = { activeDetailPhoto = it },
-                                        onNavigateToSecureFolder = { currentTab = GalleryTab.SECURE }
+                                        onNavigateToSecureFolder = { currentTab = GalleryTab.SECURE },
+                                        onNavigateToTrash = { currentTab = GalleryTab.TRASH },
+                                        onNavigateToSettings = { currentTab = GalleryTab.SETTINGS }
                                     )
                                 }
                                 GalleryTab.LABELS -> {
@@ -285,13 +261,14 @@ class MainActivity : ComponentActivity() {
                                         }
                                     )
                                 }
-                                GalleryTab.SYNC -> {
-                                    SyncScreen(viewModel = viewModel)
+                                GalleryTab.SETTINGS, GalleryTab.SYNC -> {
+                                    SettingsScreen(viewModel = viewModel)
                                 }
                                 GalleryTab.SECURE -> {
                                     SecureFolderScreen(
                                         viewModel = viewModel,
-                                        onNavigateToDetail = { activeDetailPhoto = it }
+                                        onNavigateToDetail = { activeDetailPhoto = it },
+                                        onBack = { currentTab = GalleryTab.BROWSE }
                                     )
                                 }
                                 GalleryTab.TRASH -> {
@@ -409,4 +386,4 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-enum class GalleryTab { BROWSE, LABELS, SYNC, SECURE, TRASH }
+enum class GalleryTab { BROWSE, LABELS, SETTINGS, SECURE, TRASH, SYNC }

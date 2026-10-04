@@ -1,0 +1,6 @@
+{
+  "name": "emreview",
+  "description": "Photo gallery and review application with labels, secure vault, and AI provider integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.material3.surfaceColorAtElevation
@@ -16,6 +19,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import com.example.ui.ViewMode
 import com.example.ui.GallerySortOption
 import android.widget.Toast
@@ -49,6 +54,7 @@ import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.ai.VisionModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.example.data.Photo
 import com.example.ui.GalleryViewModel
@@ -62,11 +68,20 @@ fun GalleryScreen(
     viewModel: GalleryViewModel,
     modifier: Modifier = Modifier,
     onNavigateToDetail: (Photo) -> Unit,
-    onNavigateToSecureFolder: () -> Unit
+    onNavigateToSecureFolder: () -> Unit,
+    onNavigateToTrash: () -> Unit = {},
+    onNavigateToSettings: () -> Unit = {}
 ) {
     val isGDriveEnabled by viewModel.isGDriveEnabled.collectAsState()
     val gdriveConnectedEmail by viewModel.gdriveConnectedEmail.collectAsState()
     val context = LocalContext.current
+
+    val allPhotos by viewModel.allPhotos.collectAsState()
+    val lockedCount = remember(allPhotos) { allPhotos.count { it.isLocked && !it.isDeleted } }
+    val deletedCount = remember(allPhotos) { allPhotos.count { it.isDeleted } }
+    val isAiUpdatingAlbums by viewModel.isAiUpdatingAlbums.collectAsState()
+    val aiAlbumProgress by viewModel.aiAlbumProgress.collectAsState()
+    val aiAlbumStatus by viewModel.aiAlbumStatus.collectAsState()
 
     val publicPhotos by viewModel.publicPhotos.collectAsState()
     val searchText by viewModel.searchText.collectAsState()
@@ -96,6 +111,43 @@ fun GalleryScreen(
     var showContextMenu by remember { mutableStateOf(false) }
     var showSingleFileDetailsDialog by remember { mutableStateOf<Photo?>(null) }
     var showSortMenu by remember { mutableStateOf(false) }
+
+    var isFilterFlyoutOpen by remember { mutableStateOf(false) }
+    var filterFlyoutInteractionTimestamp by remember { mutableStateOf(0L) }
+    val gridState = rememberLazyGridState()
+    val listState = rememberLazyListState()
+
+    val activeFilterCount = (if (selectedTag != null) 1 else 0) +
+            (if (selectedLocation != null) 1 else 0) +
+            (if (syncFilter != SyncFilter.ALL) 1 else 0) +
+            (if (selectedCustomLabel != null) 1 else 0)
+
+    // Autohide flyout whenever the user scrolls
+    LaunchedEffect(gridState.isScrollInProgress) {
+        if (gridState.isScrollInProgress && isFilterFlyoutOpen) {
+            isFilterFlyoutOpen = false
+        }
+    }
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress && isFilterFlyoutOpen) {
+            isFilterFlyoutOpen = false
+        }
+    }
+
+    // Inactivity autohide: if open and untouched for 10 seconds, autohide
+    LaunchedEffect(isFilterFlyoutOpen, filterFlyoutInteractionTimestamp) {
+        if (isFilterFlyoutOpen) {
+            delay(10000)
+            if (isFilterFlyoutOpen) {
+                isFilterFlyoutOpen = false
+            }
+        }
+    }
+
+    // Close flyout on system back press
+    BackHandler(enabled = isFilterFlyoutOpen) {
+        isFilterFlyoutOpen = false
+    }
 
     val viewMode by viewModel.viewMode.collectAsState()
     val sortOption by viewModel.sortOption.collectAsState()
@@ -127,7 +179,7 @@ fun GalleryScreen(
     Box(modifier = modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             
-            // 1. Sleek Search Box matching the HTML rounded shape and colors
+            // 1. Sleek Search Box and Action Toolbar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -137,7 +189,10 @@ fun GalleryScreen(
             ) {
                 TextField(
                     value = searchText,
-                    onValueChange = { viewModel.updateSearchText(it) },
+                    onValueChange = {
+                        viewModel.updateSearchText(it)
+                        if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
+                    },
                     modifier = Modifier
                         .weight(1f)
                         .height(56.dp)
@@ -181,58 +236,57 @@ fun GalleryScreen(
                     singleLine = true
                 )
 
-                // View Mode Toggle (Grid/List)
+                // Filter Flyout Toggle Button with Active Badge
                 IconButton(
                     onClick = {
-                        val nextMode = if (viewMode == ViewMode.GRID) ViewMode.LIST else ViewMode.GRID
-                        viewModel.updateViewMode(nextMode)
+                        isFilterFlyoutOpen = !isFilterFlyoutOpen
+                        if (isFilterFlyoutOpen) {
+                            filterFlyoutInteractionTimestamp = System.currentTimeMillis()
+                        }
                     },
                     modifier = Modifier
-                        .size(48.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
-                        .testTag("view_mode_toggle_button")
+                        .size(44.dp)
+                        .background(
+                            if (isFilterFlyoutOpen || activeFilterCount > 0) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                            CircleShape
+                        )
+                        .testTag("filter_toggle_button")
                 ) {
-                    Icon(
-                        imageVector = if (viewMode == ViewMode.GRID) Icons.Default.ViewList else Icons.Default.GridView,
-                        contentDescription = "Toggle View Mode",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    BadgedBox(
+                        badge = {
+                            if (activeFilterCount > 0) {
+                                Badge(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ) {
+                                    Text("$activeFilterCount")
+                                }
+                            }
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = "Filter Options",
+                            tint = if (isFilterFlyoutOpen || activeFilterCount > 0) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
-
-                AssistChip(
-                    onClick = {
-                        showAiSettingsDialog = true
-                        aiDiscoveryError = null
-                    },
-                    label = { Text("AI Setup", fontWeight = FontWeight.SemiBold) },
-                    leadingIcon = {
-                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
-                    },
-                    colors = AssistChipDefaults.assistChipColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        labelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        leadingIconContentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    ),
-                    border = AssistChipDefaults.assistChipBorder(
-                        enabled = true,
-                        borderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                    ),
-                    modifier = Modifier.testTag("ai_settings_button")
-                )
 
                 // Sorting Toggle Menu
                 Box {
                     IconButton(
                         onClick = { showSortMenu = true },
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(44.dp)
                             .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
                             .testTag("sorting_toggle_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Sort,
                             contentDescription = "Sort Options",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
 
@@ -260,254 +314,667 @@ fun GalleryScreen(
                         }
                     }
                 }
+
+                // View Mode Toggle (Grid/List)
+                IconButton(
+                    onClick = {
+                        val nextMode = if (viewMode == ViewMode.GRID) ViewMode.LIST else ViewMode.GRID
+                        viewModel.updateViewMode(nextMode)
+                    },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                        .testTag("view_mode_toggle_button")
+                ) {
+                    Icon(
+                        imageVector = if (viewMode == ViewMode.GRID) Icons.Default.ViewList else Icons.Default.GridView,
+                        contentDescription = "Toggle View Mode",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                // Settings Gear Button
+                IconButton(
+                    onClick = { onNavigateToSettings() },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                        .testTag("gallery_settings_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Settings",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
 
-            // 2. Horizon Filter Rows with Material 3 themed colors
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+            // 2. Animated Filter Flyout (Autohiding on scroll, on select, on click outside, on apply, or on inactivity)
+            AnimatedVisibility(
+                visible = isFilterFlyoutOpen,
+                enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
+                exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top)
             ) {
-                if (isAnyFilterActive) {
-                    Row(
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .testTag("filter_flyout_card"),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(4.dp)
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
+                ) {
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text(
-                            text = "Active Filters applied",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        TextButton(
-                            onClick = { viewModel.clearAllFilters() },
-                            modifier = Modifier.testTag("clear_all_filters_button"),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        // Header: Title, Active Badge, Reset All, and Close Button
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Clear,
-                                contentDescription = "Clear Filters",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Tune,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Text(
+                                    text = "Filter Stream",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                if (activeFilterCount > 0) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary
+                                    ) {
+                                        Text(
+                                            text = "$activeFilterCount active",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                if (isAnyFilterActive) {
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.clearAllFilters()
+                                            filterFlyoutInteractionTimestamp = System.currentTimeMillis()
+                                        },
+                                        modifier = Modifier.testTag("clear_all_filters_button"),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Clear,
+                                            contentDescription = "Clear Filters",
+                                            modifier = Modifier.size(16.dp),
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "Reset All",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = { isFilterFlyoutOpen = false },
+                                    modifier = Modifier.size(32.dp).testTag("close_filter_flyout_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Close Filters",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+                        // Category 1: Cloud & Storage Sync
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                text = "Clear All Filters",
-                                style = MaterialTheme.typography.labelMedium,
+                                text = "STORAGE & CLOUD",
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.error
+                                color = MaterialTheme.colorScheme.primary,
+                                letterSpacing = 0.5.sp
                             )
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                contentPadding = PaddingValues(vertical = 2.dp)
+                            ) {
+                                item {
+                                    FilterChip(
+                                        selected = syncFilter == SyncFilter.ALL,
+                                        onClick = {
+                                            viewModel.updateSyncFilter(SyncFilter.ALL)
+                                            filterFlyoutInteractionTimestamp = System.currentTimeMillis()
+                                        },
+                                        label = { Text("All Media") },
+                                        leadingIcon = { Icon(Icons.Default.Home, null, modifier = Modifier.size(14.dp)) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                        ),
+                                        modifier = Modifier.testTag("filter_sync_all")
+                                    )
+                                }
+                                if (isGDriveEnabled && !gdriveConnectedEmail.isNullOrBlank()) {
+                                    item {
+                                        FilterChip(
+                                            selected = syncFilter == SyncFilter.SYNCED,
+                                            onClick = {
+                                                viewModel.updateSyncFilter(SyncFilter.SYNCED)
+                                                filterFlyoutInteractionTimestamp = System.currentTimeMillis()
+                                            },
+                                            label = { Text("Cloud Synced") },
+                                            leadingIcon = { Icon(Icons.Default.Cloud, null, modifier = Modifier.size(14.dp)) },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                            ),
+                                            modifier = Modifier.testTag("filter_sync_synced")
+                                        )
+                                    }
+                                    item {
+                                        FilterChip(
+                                            selected = syncFilter == SyncFilter.UNSYNCED,
+                                            onClick = {
+                                                viewModel.updateSyncFilter(SyncFilter.UNSYNCED)
+                                                filterFlyoutInteractionTimestamp = System.currentTimeMillis()
+                                            },
+                                            label = { Text("Local Only") },
+                                            leadingIcon = { Icon(Icons.Default.CloudQueue, null, modifier = Modifier.size(14.dp)) },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                            ),
+                                            modifier = Modifier.testTag("filter_sync_unsynced")
+                                        )
+                                    }
+                                }
+                                if (selectedCustomLabel != null) {
+                                    item {
+                                        FilterChip(
+                                            selected = true,
+                                            onClick = {
+                                                viewModel.selectCustomLabel(null)
+                                                filterFlyoutInteractionTimestamp = System.currentTimeMillis()
+                                            },
+                                            label = { Text("Album: $selectedCustomLabel") },
+                                            leadingIcon = { Icon(Icons.Default.Folder, null, modifier = Modifier.size(14.dp)) },
+                                            trailingIcon = {
+                                                Icon(
+                                                    Icons.Default.Close,
+                                                    null,
+                                                    modifier = Modifier.size(14.dp).clickable {
+                                                        viewModel.selectCustomLabel(null)
+                                                        filterFlyoutInteractionTimestamp = System.currentTimeMillis()
+                                                    }
+                                                )
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                            ),
+                                            modifier = Modifier.testTag("filter_selected_custom_label")
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Category 2: Locations
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "LOCATIONS",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                letterSpacing = 0.5.sp
+                            )
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                contentPadding = PaddingValues(vertical = 2.dp)
+                            ) {
+                                item {
+                                    InputChip(
+                                        selected = selectedLocation == null,
+                                        onClick = {
+                                            viewModel.selectLocation(null)
+                                            filterFlyoutInteractionTimestamp = System.currentTimeMillis()
+                                        },
+                                        label = { Text("All Places") },
+                                        colors = InputChipDefaults.inputChipColors(
+                                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                        ),
+                                        modifier = Modifier.testTag("filter_place_all")
+                                    )
+                                }
+                                items(availableLocations) { loc ->
+                                    InputChip(
+                                        selected = selectedLocation == loc,
+                                        onClick = {
+                                            viewModel.selectLocation(if (selectedLocation == loc) null else loc)
+                                            filterFlyoutInteractionTimestamp = System.currentTimeMillis()
+                                        },
+                                        label = { Text(loc) },
+                                        leadingIcon = { Icon(Icons.Default.LocationOn, null, modifier = Modifier.size(12.dp)) },
+                                        colors = InputChipDefaults.inputChipColors(
+                                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                        ),
+                                        modifier = Modifier.testTag("filter_place_$loc")
+                                    )
+                                }
+                            }
+                        }
+
+                        // Category 3: Smart AI Tags
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "SMART TAGS",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                letterSpacing = 0.5.sp
+                            )
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                contentPadding = PaddingValues(vertical = 2.dp)
+                            ) {
+                                item {
+                                    SuggestionChip(
+                                        onClick = {
+                                            viewModel.selectTag(null)
+                                            filterFlyoutInteractionTimestamp = System.currentTimeMillis()
+                                        },
+                                        label = {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                Icon(imageVector = Icons.Default.Collections, contentDescription = null, modifier = Modifier.size(14.dp))
+                                                Text("All Photos")
+                                            }
+                                        },
+                                        colors = SuggestionChipDefaults.suggestionChipColors(
+                                            containerColor = if (selectedTag == null) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                                            labelColor = if (selectedTag == null) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                        ),
+                                        modifier = Modifier.testTag("filter_tag_all")
+                                    )
+                                }
+                                items(availableTags) { tag ->
+                                    SuggestionChip(
+                                        onClick = {
+                                            viewModel.selectTag(if (selectedTag == tag) null else tag)
+                                            filterFlyoutInteractionTimestamp = System.currentTimeMillis()
+                                        },
+                                        label = { Text("#$tag") },
+                                        colors = SuggestionChipDefaults.suggestionChipColors(
+                                            containerColor = if (selectedTag == tag) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                                            labelColor = if (selectedTag == tag) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                        ),
+                                        modifier = Modifier.testTag("filter_tag_$tag")
+                                    )
+                                }
+                            }
+                        }
+
+                        // Footer with Apply & Close Button
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FilledTonalButton(
+                                onClick = { isFilterFlyoutOpen = false },
+                                modifier = Modifier.testTag("apply_filters_button"),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Done", fontWeight = FontWeight.SemiBold)
+                            }
                         }
                     }
                 }
+            }
 
-                // Sync Filters (All, Cloud, Local)
+            // Compact Active Filters Bar (Shown ONLY when flyout is closed AND filters are applied)
+            AnimatedVisibility(
+                visible = !isFilterFlyoutOpen && (activeFilterCount > 0),
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
                 LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (isAnyFilterActive) {
-                        item {
-                            SuggestionChip(
-                                onClick = { viewModel.clearAllFilters() },
-                                label = { Text("Clear Filters", fontWeight = FontWeight.Bold) },
-                                icon = { Icon(Icons.Default.Clear, "Clear Filters", modifier = Modifier.size(14.dp)) },
-                                colors = SuggestionChipDefaults.suggestionChipColors(
-                                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                                    labelColor = MaterialTheme.colorScheme.onErrorContainer,
-                                    iconContentColor = MaterialTheme.colorScheme.onErrorContainer
-                                ),
-                                modifier = Modifier.testTag("clear_all_filters_chip")
-                            )
-                        }
+                    item {
+                        SuggestionChip(
+                            onClick = { viewModel.clearAllFilters() },
+                            label = { Text("Clear All", fontWeight = FontWeight.Bold, fontSize = 12.sp) },
+                            icon = { Icon(Icons.Default.Clear, contentDescription = "Clear All", modifier = Modifier.size(12.dp)) },
+                            colors = SuggestionChipDefaults.suggestionChipColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f),
+                                labelColor = MaterialTheme.colorScheme.onErrorContainer,
+                                iconContentColor = MaterialTheme.colorScheme.onErrorContainer
+                            ),
+                            modifier = Modifier.testTag("clear_all_filters_chip")
+                        )
                     }
                     if (selectedCustomLabel != null) {
                         item {
-                            FilterChip(
+                            InputChip(
                                 selected = true,
                                 onClick = { viewModel.selectCustomLabel(null) },
-                                label = { Text("Album: $selectedCustomLabel") },
-                                leadingIcon = { Icon(Icons.Default.Folder, null, modifier = Modifier.size(14.dp)) },
-                                trailingIcon = { Icon(Icons.Default.Close, null, modifier = Modifier.size(14.dp).clickable { viewModel.selectCustomLabel(null) }) },
-                                colors = FilterChipDefaults.filterChipColors(
+                                label = { Text("Album: $selectedCustomLabel", fontSize = 12.sp) },
+                                trailingIcon = {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Remove album filter",
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                },
+                                colors = InputChipDefaults.inputChipColors(
                                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    containerColor = MaterialTheme.colorScheme.surface,
-                                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    iconColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                ),
-                                border = FilterChipDefaults.filterChipBorder(
-                                    enabled = true,
-                                    selected = true,
-                                    borderColor = MaterialTheme.colorScheme.primary
-                                ),
-                                modifier = Modifier.testTag("filter_selected_custom_label")
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
                             )
                         }
                     }
-                    item {
-                        FilterChip(
-                            selected = syncFilter == SyncFilter.ALL,
-                            onClick = { viewModel.updateSyncFilter(SyncFilter.ALL) },
-                            label = { Text("All Media") },
-                            leadingIcon = { Icon(Icons.Default.Home, null, modifier = Modifier.size(14.dp)) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                iconColor = MaterialTheme.colorScheme.onSurfaceVariant
-                            ),
-                            border = FilterChipDefaults.filterChipBorder(
-                                enabled = true,
-                                selected = syncFilter == SyncFilter.ALL,
-                                borderColor = MaterialTheme.colorScheme.outline
-                            ),
-                            modifier = Modifier.testTag("filter_sync_all")
-                        )
-                    }
-                    if (isGDriveEnabled && !gdriveConnectedEmail.isNullOrBlank()) {
+                    if (syncFilter != SyncFilter.ALL) {
                         item {
-                            FilterChip(
-                                selected = syncFilter == SyncFilter.SYNCED,
-                                onClick = { viewModel.updateSyncFilter(SyncFilter.SYNCED) },
-                                label = { Text("Cloud Synced") },
-                                leadingIcon = { Icon(Icons.Default.Cloud, null, modifier = Modifier.size(14.dp)) },
-                                colors = FilterChipDefaults.filterChipColors(
+                            InputChip(
+                                selected = true,
+                                onClick = { viewModel.updateSyncFilter(SyncFilter.ALL) },
+                                label = { Text(if (syncFilter == SyncFilter.SYNCED) "Cloud" else "Local", fontSize = 12.sp) },
+                                trailingIcon = {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Remove sync filter",
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                },
+                                colors = InputChipDefaults.inputChipColors(
                                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    containerColor = MaterialTheme.colorScheme.surface,
-                                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    iconColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                ),
-                                border = FilterChipDefaults.filterChipBorder(
-                                    enabled = true,
-                                    selected = syncFilter == SyncFilter.SYNCED,
-                                    borderColor = MaterialTheme.colorScheme.outline
-                                ),
-                                modifier = Modifier.testTag("filter_sync_synced")
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
                             )
                         }
+                    }
+                    if (selectedLocation != null) {
                         item {
-                            FilterChip(
-                                selected = syncFilter == SyncFilter.UNSYNCED,
-                                onClick = { viewModel.updateSyncFilter(SyncFilter.UNSYNCED) },
-                                label = { Text("Local Only") },
-                                leadingIcon = { Icon(Icons.Default.CloudQueue, null, modifier = Modifier.size(14.dp)) },
-                                colors = FilterChipDefaults.filterChipColors(
+                            InputChip(
+                                selected = true,
+                                onClick = { viewModel.selectLocation(null) },
+                                label = { Text(selectedLocation!!, fontSize = 12.sp) },
+                                leadingIcon = { Icon(Icons.Default.LocationOn, null, modifier = Modifier.size(12.dp)) },
+                                trailingIcon = {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Remove place filter",
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                },
+                                colors = InputChipDefaults.inputChipColors(
                                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    containerColor = MaterialTheme.colorScheme.surface,
-                                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    iconColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                ),
-                                border = FilterChipDefaults.filterChipBorder(
-                                    enabled = true,
-                                    selected = syncFilter == SyncFilter.UNSYNCED,
-                                    borderColor = MaterialTheme.colorScheme.outline
-                                ),
-                                modifier = Modifier.testTag("filter_sync_unsynced")
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
                             )
                         }
                     }
-                }
-
-                // Extracted Places Filter
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    item {
-                        InputChip(
-                            selected = selectedLocation == null,
-                            onClick = { viewModel.selectLocation(null) },
-                            label = { Text("All Places") },
-                            colors = InputChipDefaults.inputChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-                            ),
-                            border = InputChipDefaults.inputChipBorder(
-                                enabled = true,
-                                selected = selectedLocation == null,
-                                borderColor = MaterialTheme.colorScheme.outline
-                            ),
-                            modifier = Modifier.testTag("filter_place_all")
-                        )
+                    if (selectedTag != null) {
+                        item {
+                            InputChip(
+                                selected = true,
+                                onClick = { viewModel.selectTag(null) },
+                                label = { Text("#$selectedTag", fontSize = 12.sp) },
+                                trailingIcon = {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Remove tag filter",
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                },
+                                colors = InputChipDefaults.inputChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            )
+                        }
                     }
-                    items(availableLocations) { loc ->
-                        InputChip(
-                            selected = selectedLocation == loc,
-                            onClick = { viewModel.selectLocation(loc) },
-                            label = { Text(loc) },
-                            leadingIcon = { Icon(Icons.Default.LocationOn, null, modifier = Modifier.size(12.dp)) },
-                            colors = InputChipDefaults.inputChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-                            ),
-                            border = InputChipDefaults.inputChipBorder(
-                                enabled = true,
-                                selected = selectedLocation == loc,
-                                borderColor = MaterialTheme.colorScheme.outline
-                            ),
-                            modifier = Modifier.testTag("filter_place_$loc")
-                        )
-                    }
-                }
-
-                // Dynamically Extracted Smart tag chips with Auto-Awesome visual sparkles
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
                     item {
                         SuggestionChip(
-                            onClick = { viewModel.selectTag(null) },
-                            label = { 
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Icon(imageVector = Icons.Default.Collections, contentDescription = null, modifier = Modifier.size(14.dp), tint = if (selectedTag == null) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary)
-                                    Text("All Photos")
-                                }
+                            onClick = {
+                                isFilterFlyoutOpen = true
+                                filterFlyoutInteractionTimestamp = System.currentTimeMillis()
                             },
+                            label = { Text("+ More", fontSize = 12.sp) },
                             colors = SuggestionChipDefaults.suggestionChipColors(
-                                containerColor = if (selectedTag == null) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                                labelColor = if (selectedTag == null) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                            ),
-                            border = SuggestionChipDefaults.suggestionChipBorder(
-                                enabled = true,
-                                borderColor = if (selectedTag == null) Color.Transparent else MaterialTheme.colorScheme.outline
-                            ),
-                            modifier = Modifier.testTag("filter_tag_all")
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         )
                     }
-                    items(availableTags) { tag ->
-                        SuggestionChip(
-                            onClick = { viewModel.selectTag(tag) },
-                            label = { Text("#$tag") },
-                            colors = SuggestionChipDefaults.suggestionChipColors(
-                                containerColor = if (selectedTag == tag) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                                labelColor = if (selectedTag == tag) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
-                            ),
-                            border = SuggestionChipDefaults.suggestionChipBorder(
-                                enabled = true,
-                                borderColor = if (selectedTag == tag) Color.Transparent else MaterialTheme.colorScheme.outline
-                            ),
-                            modifier = Modifier.testTag("filter_tag_$tag")
+                }
+            }
+
+            // Home Hub: Private Vault & Trash quick access cards
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Private Vault Card
+                Surface(
+                    onClick = {
+                        if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
+                        onNavigateToSecureFolder()
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("home_vault_card"),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "Private Vault",
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Vault",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (lockedCount > 0) "$lockedCount private" else "Protected",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                // Trash Bin Card
+                Surface(
+                    onClick = {
+                        if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
+                        onNavigateToTrash()
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("home_trash_card"),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (deletedCount > 0) MaterialTheme.colorScheme.errorContainer 
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteOutline,
+                                contentDescription = "Trash",
+                                tint = if (deletedCount > 0) MaterialTheme.colorScheme.onErrorContainer 
+                                       else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Trash",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (deletedCount > 0) "$deletedCount deleted" else "Empty",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (deletedCount > 0) MaterialTheme.colorScheme.error 
+                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            // AI Smart Album Organizing Banner (Shown when AI album update is active)
+            AnimatedVisibility(
+                visible = isAiUpdatingAlbums,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                        .testTag("home_ai_album_update_banner"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = "AI is auto-updating albums...",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                            TextButton(
+                                onClick = { viewModel.cancelAiAlbumUpdate() },
+                                modifier = Modifier.height(28.dp).testTag("home_btn_cancel_ai_albums")
+                            ) {
+                                Text("Cancel", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                        val frac = if (aiAlbumProgress.second > 0) aiAlbumProgress.first.toFloat() / aiAlbumProgress.second.toFloat() else 0f
+                        LinearProgressIndicator(
+                            progress = { frac },
+                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                        Text(
+                            text = aiAlbumStatus ?: "Categorizing photos...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -518,7 +985,13 @@ fun GalleryScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
+                        .weight(1f)
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
@@ -558,6 +1031,7 @@ fun GalleryScreen(
             } else {
                 if (viewMode == ViewMode.GRID) {
                     LazyVerticalGrid(
+                        state = gridState,
                         columns = GridCells.Adaptive(minSize = 110.dp),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -596,6 +1070,7 @@ fun GalleryScreen(
                                     isGDriveEnabled = isGDriveEnabled,
                                     gdriveConnectedEmail = gdriveConnectedEmail,
                                     onClick = {
+                                        if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
                                         if (isSelectionMode) {
                                             viewModel.togglePhotoSelection(photo.id)
                                         } else {
@@ -603,6 +1078,7 @@ fun GalleryScreen(
                                         }
                                     },
                                     onLongClick = {
+                                        if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
                                         if (!isSelectionMode) {
                                             activeLongPressedPhoto = photo
                                             showContextMenu = true
@@ -681,6 +1157,7 @@ fun GalleryScreen(
                     }
                 } else {
                     LazyColumn(
+                        state = listState,
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
@@ -714,6 +1191,7 @@ fun GalleryScreen(
                                     isGDriveEnabled = isGDriveEnabled,
                                     gdriveConnectedEmail = gdriveConnectedEmail,
                                     onClick = {
+                                        if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
                                         if (isSelectionMode) {
                                             viewModel.togglePhotoSelection(photo.id)
                                         } else {
@@ -721,6 +1199,7 @@ fun GalleryScreen(
                                         }
                                     },
                                     onLongClick = {
+                                        if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
                                         if (!isSelectionMode) {
                                             activeLongPressedPhoto = photo
                                             showContextMenu = true

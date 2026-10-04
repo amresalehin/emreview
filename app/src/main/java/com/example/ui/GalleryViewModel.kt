@@ -82,6 +82,26 @@ class GalleryViewModel(application: Application, private val repository: PhotoRe
     private val _selectedCustomLabel = MutableStateFlow<String?>(null)
     val selectedCustomLabel = _selectedCustomLabel.asStateFlow()
 
+    // AI Smart Album Automation states
+    private val _isAiUpdatingAlbums = MutableStateFlow(false)
+    val isAiUpdatingAlbums = _isAiUpdatingAlbums.asStateFlow()
+
+    private val _aiAlbumProgress = MutableStateFlow(0 to 0) // current to total
+    val aiAlbumProgress = _aiAlbumProgress.asStateFlow()
+
+    private val _aiAlbumStatus = MutableStateFlow<String?>(null)
+    val aiAlbumStatus = _aiAlbumStatus.asStateFlow()
+
+    private val _autoAssignAlbumsOnAi = MutableStateFlow(true)
+    val autoAssignAlbumsOnAi = _autoAssignAlbumsOnAi.asStateFlow()
+
+    fun setAutoAssignAlbumsOnAi(enabled: Boolean) {
+        _autoAssignAlbumsOnAi.value = enabled
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.saveSystemConfig("auto_assign_albums_on_ai", enabled.toString())
+        }
+    }
+
     // PIN vault states
     private val _isVaultUnlocked = MutableStateFlow(false)
     val isVaultUnlocked = _isVaultUnlocked.asStateFlow()
@@ -200,6 +220,16 @@ class GalleryViewModel(application: Application, private val repository: PhotoRe
         prepopulateIfEmpty()
         loadCustomLabels()
         loadGoogleDriveStatus()
+        loadAiAlbumSettings()
+    }
+
+    private fun loadAiAlbumSettings() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val autoAssign = repository.getSystemConfig("auto_assign_albums_on_ai")
+            if (autoAssign != null) {
+                _autoAssignAlbumsOnAi.value = autoAssign == "true"
+            }
+        }
     }
 
     private fun loadGoogleDriveStatus() {
@@ -761,14 +791,192 @@ class GalleryViewModel(application: Application, private val repository: PhotoRe
         } else null
     }
 
-    /** Trigger image analysis with the user-configured provider/model. */
+    companion object {
+        val SMART_ALBUM_CATEGORIES = mapOf(
+            "Nature" to listOf("nature", "landscape", "mountain", "beach", "forest", "tree", "river", "lake", "ocean", "outdoor", "outdoors", "sky", "sunset", "sunrise", "flower", "garden", "scenic"),
+            "People" to listOf("person", "people", "portrait", "face", "selfie", "girl", "boy", "man", "woman", "child", "family", "crowd", "smile", "friend"),
+            "Food & Dining" to listOf("food", "dining", "meal", "dish", "cooking", "restaurant", "lunch", "dinner", "breakfast", "coffee", "cake", "fruit", "drink", "sushi", "pizza", "pasta", "dessert"),
+            "Architecture" to listOf("building", "architecture", "city", "street", "urban", "monument", "landmark", "house", "skyscraper", "bridge", "tower", "castle"),
+            "Travel" to listOf("travel", "vacation", "trip", "tourist", "tourism", "hotel", "airport", "resort", "sea", "road", "flight"),
+            "Pets & Animals" to listOf("dog", "cat", "pet", "puppy", "kitten", "bird", "animal", "fauna", "wildlife"),
+            "Documents" to listOf("document", "receipt", "text", "paper", "screenshot", "whiteboard", "note", "letter", "page", "invoice")
+        )
+    }
+
+    fun determineAlbumsForPhoto(photo: Photo, tags: List<String>, description: String): Set<String> {
+        val matchedAlbums = mutableSetOf<String>()
+        val combinedText = "${photo.title} ${photo.location} $description ${tags.joinToString(" ")}".lowercase()
+
+        // 1. Match standard smart album categories
+        SMART_ALBUM_CATEGORIES.forEach { (albumName, keywords) ->
+            if (keywords.any { keyword -> combinedText.contains(keyword) }) {
+                matchedAlbums.add(albumName)
+            }
+        }
+
+        // 2. Match existing custom labels
+        _customLabels.value.forEach { customLabel ->
+            val labelLower = customLabel.lowercase()
+            if (combinedText.contains(labelLower) || tags.any { it.equals(labelLower, ignoreCase = true) }) {
+                matchedAlbums.add(customLabel)
+            }
+        }
+
+        return matchedAlbums
+    }
+
+    private var aiAlbumJob: kotlinx.coroutines.Job? = null
+
+    fun cancelAiAlbumUpdate() {
+        aiAlbumJob?.cancel()
+        _isAiUpdatingAlbums.value = false
+        _aiAlbumStatus.value = "Cancelled"
+    }
+
+    /**
+     * AI Feature: Analyze public photos and auto-update / categorize them into smart albums.
+     */
+    fun autoUpdateAlbumsWithAi() {
+        if (_isAiUpdatingAlbums.value) return
+        _isAiUpdatingAlbums.value = true
+        _aiAlbumStatus.value = "Preparing photo collection..."
+
+        aiAlbumJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val photosToProcess = allPhotos.value.filter { !it.isDeleted && !it.isLocked }
+                val total = photosToProcess.size
+                if (total == 0) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(getApplication(), "No photos available to organize.", Toast.LENGTH_SHORT).show()
+                    }
+                    _isAiUpdatingAlbums.value = false
+                    return@launch
+                }
+
+                _aiAlbumProgress.value = 0 to total
+                val provider = configuredAiProvider()
+                var newlyOrganizedCount = 0
+                val newlyAddedAlbums = mutableSetOf<String>()
+
+                for ((index, photo) in photosToProcess.withIndex()) {
+                    _aiAlbumProgress.value = (index + 1) to total
+                    _aiAlbumStatus.value = "Categorizing ${index + 1}/$total: ${photo.title}"
+
+                    var currentDesc = photo.description
+                    val needsAiAnalysis = photo.tags.isBlank() || photo.tags == "unindexed" || photo.tags == "auto"
+
+                    val tagList: List<String> = if (needsAiAnalysis) {
+                        try {
+                            val taggingResult = repository.analyzePhoto(getApplication(), photo.imageUrl, photo.title, provider)
+                            currentDesc = taggingResult.description
+                            taggingResult.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                        } catch (e: Exception) {
+                            Log.w("GalleryViewModel", "Auto album analysis failed for photo ${photo.id}", e)
+                            photo.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                        }
+                    } else {
+                        photo.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    }
+
+                    val matchedAlbums = determineAlbumsForPhoto(photo, tagList, currentDesc)
+                    if (matchedAlbums.isNotEmpty()) {
+                        val existingTags = photo.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
+
+                        // Add new tags from analysis if available
+                        tagList.forEach { t ->
+                            if (!t.startsWith("group:") && !existingTags.any { it.equals(t, ignoreCase = true) }) {
+                                existingTags.add(t)
+                            }
+                        }
+
+                        // Add group tags for each matched album
+                        var photoUpdated = false
+                        matchedAlbums.forEach { album ->
+                            val groupTag = "group:$album"
+                            if (!existingTags.any { it.equals(groupTag, ignoreCase = true) }) {
+                                existingTags.add(groupTag)
+                                photoUpdated = true
+                            }
+                            if (!_customLabels.value.contains(album)) {
+                                newlyAddedAlbums.add(album)
+                            }
+                        }
+
+                        if (photoUpdated || needsAiAnalysis) {
+                            val updatedPhoto = photo.copy(
+                                tags = existingTags.joinToString(", "),
+                                description = currentDesc
+                            )
+                            repository.updatePhoto(updatedPhoto)
+                            newlyOrganizedCount++
+                        }
+                    }
+                }
+
+                if (newlyAddedAlbums.isNotEmpty()) {
+                    val updatedLabels = (_customLabels.value + newlyAddedAlbums).distinct()
+                    _customLabels.value = updatedLabels
+                    repository.saveSystemConfig("custom_labels_list", updatedLabels.joinToString(","))
+                }
+
+                withContext(Dispatchers.Main) {
+                    val msg = "✨ AI organized $newlyOrganizedCount photos across ${_customLabels.value.size} albums!"
+                    Toast.makeText(getApplication(), msg, Toast.LENGTH_LONG).show()
+                }
+                _aiAlbumStatus.value = "Complete"
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) {
+                    Log.i("GalleryViewModel", "AI album auto-update cancelled.")
+                } else {
+                    Log.e("GalleryViewModel", "AI album auto-update failed", e)
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(getApplication(), "AI album update: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } finally {
+                _isAiUpdatingAlbums.value = false
+            }
+        }
+    }
+
+    /** Trigger image analysis with the user-configured provider/model and auto-update albums. */
     fun triggerAiTagging(photo: Photo) {
         if (_isAnalyzing.value != null) return
         _isAnalyzing.value = photo.id
         viewModelScope.launch {
             try {
                 val result = repository.analyzePhoto(getApplication(), photo.imageUrl, photo.title, configuredAiProvider())
-                repository.updatePhoto(photo.copy(tags = result.tags, description = result.description))
+
+                // Preserve existing group tags
+                val existingGroupTags = photo.tags.split(",")
+                    .map { it.trim() }
+                    .filter { it.startsWith("group:", ignoreCase = true) }
+                    .toMutableList()
+
+                val newTags = result.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
+
+                // Auto-assign to albums if enabled
+                if (_autoAssignAlbumsOnAi.value) {
+                    val matchedAlbums = determineAlbumsForPhoto(photo, newTags, result.description)
+                    val newlyDiscoveredAlbums = mutableListOf<String>()
+                    matchedAlbums.forEach { album ->
+                        val groupTag = "group:$album"
+                        if (!existingGroupTags.any { it.equals(groupTag, ignoreCase = true) }) {
+                            existingGroupTags.add(groupTag)
+                        }
+                        if (!_customLabels.value.contains(album)) {
+                            newlyDiscoveredAlbums.add(album)
+                        }
+                    }
+                    if (newlyDiscoveredAlbums.isNotEmpty()) {
+                        val updatedLabels = (_customLabels.value + newlyDiscoveredAlbums).distinct()
+                        _customLabels.value = updatedLabels
+                        repository.saveSystemConfig("custom_labels_list", updatedLabels.joinToString(","))
+                    }
+                }
+
+                val combinedTags = (newTags + existingGroupTags).distinct().joinToString(", ")
+                repository.updatePhoto(photo.copy(tags = combinedTags, description = result.description))
                 withContext(Dispatchers.Main) {
                     Toast.makeText(getApplication(), if (result.isRealAI) "AI analysis complete!" else "Offline tagging complete!", Toast.LENGTH_SHORT).show()
                 }
