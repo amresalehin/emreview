@@ -34,7 +34,7 @@ jobs:
         run: ./gradlew --no-daemon --stacktrace lintDebug testDebugUnitTest
 
       - name: Build optimized signed release APKs and AAB
-        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease :app:bundleRelease
+        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease -PapkSplits && ./gradlew --no-daemon --stacktrace :app:bundleRelease
 
       - name: Verify release artifacts
         shell: bash
