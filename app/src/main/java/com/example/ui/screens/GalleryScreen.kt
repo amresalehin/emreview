@@ -199,22 +199,26 @@ fun GalleryScreen(
                     )
                 }
 
-                IconButton(
+                AssistChip(
                     onClick = {
                         showAiSettingsDialog = true
                         aiDiscoveryError = null
                     },
-                    modifier = Modifier
-                        .size(48.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
-                        .testTag("ai_settings_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "AI Provider Settings",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                    label = { Text("AI Setup", fontWeight = FontWeight.SemiBold) },
+                    leadingIcon = {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                    },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        labelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        leadingIconContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    border = AssistChipDefaults.assistChipBorder(
+                        enabled = true,
+                        borderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                    ),
+                    modifier = Modifier.testTag("ai_settings_button")
+                )
 
                 // Sorting Toggle Menu
                 Box {
@@ -1384,19 +1388,49 @@ fun GalleryScreen(
         if (showAiSettingsDialog) {
             AlertDialog(
                 onDismissRequest = { showAiSettingsDialog = false },
-                title = { Text("AI Provider") },
+                icon = {
+                    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                        Icon(
+                            Icons.Default.AutoAwesome,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(10.dp).size(22.dp)
+                        )
+                    }
+                },
+                title = {
+                    Column {
+                        Text("AI Setup", fontWeight = FontWeight.Bold)
+                        Text(
+                            "Connect your vision provider",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
                 text = {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text(
-                            "Use any OpenAI-compatible vision API. Enter its base URL and key, discover available models, then select one.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(20.dp))
+                                Text(
+                                    "Works with OpenAI-compatible vision APIs. Enter the provider URL and key, then discover its available models.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
 
                         OutlinedTextField(
                             value = aiBaseUrl,
@@ -1471,22 +1505,34 @@ fun GalleryScreen(
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.Bold
                             )
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 aiModels.forEach { model ->
-                                    TextButton(
-                                        onClick = { aiModelId = model.id },
-                                        modifier = Modifier.fillMaxWidth()
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth().clickable { aiModelId = model.id },
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (model.id == aiModelId) MaterialTheme.colorScheme.primaryContainer
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                        border = if (model.id == aiModelId)
+                                            androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+                                        else null
                                     ) {
-                                        Column(modifier = Modifier.fillMaxWidth()) {
-                                            Text(
-                                                model.name,
-                                                fontWeight = if (model.id == aiModelId) FontWeight.Bold else FontWeight.Medium
-                                            )
-                                            Text(
-                                                if (model.capabilityKnown) "Vision capability verified" else "Vision capability unverified",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(model.name, fontWeight = if (model.id == aiModelId) FontWeight.Bold else FontWeight.Medium,
+                                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                Text(
+                                                    if (model.capabilityKnown) "Vision capability verified" else "Capability not verified",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            if (model.id == aiModelId) {
+                                                Icon(Icons.Default.CheckCircle, contentDescription = "Selected",
+                                                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                                            }
                                         }
                                     }
                                 }
