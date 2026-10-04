@@ -12,6 +12,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.input.pointer.PointerEventPass
+import kotlinx.coroutines.Job
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -111,11 +120,16 @@ fun GalleryScreen(
     var showContextMenu by remember { mutableStateOf(false) }
     var showSingleFileDetailsDialog by remember { mutableStateOf<Photo?>(null) }
     var showSortMenu by remember { mutableStateOf(false) }
+    var showSortDialog by remember { mutableStateOf(false) }
+    var showViewModeDialog by remember { mutableStateOf(false) }
+    var showTopOverflowMenu by remember { mutableStateOf(false) }
 
     var isFilterFlyoutOpen by remember { mutableStateOf(false) }
     var filterFlyoutInteractionTimestamp by remember { mutableStateOf(0L) }
     val gridState = rememberLazyGridState()
+    val staggeredGridState = rememberLazyStaggeredGridState()
     val listState = rememberLazyListState()
+    var zoomScale by remember { mutableFloatStateOf(1f) }
 
     val activeFilterCount = (if (selectedTag != null) 1 else 0) +
             (if (selectedLocation != null) 1 else 0) +
@@ -152,6 +166,37 @@ fun GalleryScreen(
     val viewMode by viewModel.viewMode.collectAsState()
     val sortOption by viewModel.sortOption.collectAsState()
     val coroutineScope = rememberCoroutineScope()
+    var viewModeHudMessage by remember { mutableStateOf<String?>(null) }
+    var viewModeHudJob by remember { mutableStateOf<Job?>(null) }
+
+    val cycleViewMode: (Boolean) -> Unit = { zoomIn ->
+        val nextMode = if (zoomIn) {
+            when (viewMode) {
+                ViewMode.COMPACT -> ViewMode.GRID
+                ViewMode.GRID -> ViewMode.COZY
+                ViewMode.COZY -> ViewMode.MASONRY
+                ViewMode.MASONRY -> ViewMode.LIST
+                ViewMode.LIST -> null
+            }
+        } else {
+            when (viewMode) {
+                ViewMode.LIST -> ViewMode.MASONRY
+                ViewMode.MASONRY -> ViewMode.COZY
+                ViewMode.COZY -> ViewMode.GRID
+                ViewMode.GRID -> ViewMode.COMPACT
+                ViewMode.COMPACT -> null
+            }
+        }
+        if (nextMode != null) {
+            viewModel.updateViewMode(nextMode)
+            viewModeHudMessage = nextMode.label
+            viewModeHudJob?.cancel()
+            viewModeHudJob = coroutineScope.launch {
+                delay(1500)
+                viewModeHudMessage = null
+            }
+        }
+    }
     var showAiSettingsDialog by remember { mutableStateOf(false) }
     var aiBaseUrl by remember { mutableStateOf("") }
     var aiApiKey by remember { mutableStateOf("") }
@@ -236,118 +281,180 @@ fun GalleryScreen(
                     singleLine = true
                 )
 
-                // Filter Flyout Toggle Button with Active Badge
-                IconButton(
-                    onClick = {
-                        isFilterFlyoutOpen = !isFilterFlyoutOpen
-                        if (isFilterFlyoutOpen) {
-                            filterFlyoutInteractionTimestamp = System.currentTimeMillis()
-                        }
-                    },
-                    modifier = Modifier
-                        .size(44.dp)
-                        .background(
-                            if (isFilterFlyoutOpen || activeFilterCount > 0) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                            CircleShape
-                        )
-                        .testTag("filter_toggle_button")
-                ) {
-                    BadgedBox(
-                        badge = {
-                            if (activeFilterCount > 0) {
-                                Badge(
-                                    containerColor = MaterialTheme.colorScheme.primary,
-                                    contentColor = MaterialTheme.colorScheme.onPrimary
-                                ) {
-                                    Text("$activeFilterCount")
-                                }
-                            }
-                        }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Tune,
-                            contentDescription = "Filter Options",
-                            tint = if (isFilterFlyoutOpen || activeFilterCount > 0) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-
-                // Sorting Toggle Menu
+                // Top Three-Dot Overflow Menu (Contains Filters, Sort, View Mode, AI, Settings)
                 Box {
                     IconButton(
-                        onClick = { showSortMenu = true },
+                        onClick = { showTopOverflowMenu = true },
                         modifier = Modifier
                             .size(44.dp)
-                            .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
-                            .testTag("sorting_toggle_button")
+                            .background(
+                                if (activeFilterCount > 0) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                CircleShape
+                            )
+                            .testTag("gallery_overflow_menu_button")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Sort,
-                            contentDescription = "Sort Options",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    DropdownMenu(
-                        expanded = showSortMenu,
-                        onDismissRequest = { showSortMenu = false },
-                        modifier = Modifier.background(MaterialTheme.colorScheme.surface)
-                    ) {
-                        GallerySortOption.values().forEach { option ->
-                            DropdownMenuItem(
-                                text = { Text(option.displayName) },
-                                leadingIcon = {
-                                    Icon(
-                                        imageVector = if (sortOption == option) Icons.Default.Check else Icons.Default.Sort,
-                                        contentDescription = null,
-                                        tint = if (sortOption == option) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                },
-                                onClick = {
-                                    viewModel.updateSortOption(option)
-                                    showSortMenu = false
-                                },
-                                modifier = Modifier.testTag("sorting_option_${option.name.lowercase()}")
+                        BadgedBox(
+                            badge = {
+                                if (activeFilterCount > 0) {
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary
+                                    ) {
+                                        Text("$activeFilterCount")
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "More Options",
+                                tint = if (activeFilterCount > 0) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
-                }
 
-                // View Mode Toggle (Grid/List)
-                IconButton(
-                    onClick = {
-                        val nextMode = if (viewMode == ViewMode.GRID) ViewMode.LIST else ViewMode.GRID
-                        viewModel.updateViewMode(nextMode)
-                    },
-                    modifier = Modifier
-                        .size(44.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
-                        .testTag("view_mode_toggle_button")
-                ) {
-                    Icon(
-                        imageVector = if (viewMode == ViewMode.GRID) Icons.Default.ViewList else Icons.Default.GridView,
-                        contentDescription = "Toggle View Mode",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                    DropdownMenu(
+                        expanded = showTopOverflowMenu,
+                        onDismissRequest = { showTopOverflowMenu = false },
+                        modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                    ) {
+                        // 1. View Mode Item
+                        DropdownMenuItem(
+                            text = { Text("View: ${viewMode.label}") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = when (viewMode) {
+                                        ViewMode.GRID -> Icons.Default.GridView
+                                        ViewMode.MASONRY -> Icons.Default.Dashboard
+                                        ViewMode.COZY -> Icons.Default.ViewAgenda
+                                        ViewMode.COMPACT -> Icons.Default.Apps
+                                        ViewMode.LIST -> Icons.Default.ViewList
+                                    },
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            onClick = {
+                                showTopOverflowMenu = false
+                                showViewModeDialog = true
+                            },
+                            modifier = Modifier.testTag("view_mode_toggle_button")
+                        )
 
-                // Settings Gear Button
-                IconButton(
-                    onClick = { onNavigateToSettings() },
-                    modifier = Modifier
-                        .size(44.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
-                        .testTag("gallery_settings_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Settings",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
+                        // 2. Sort Item
+                        DropdownMenuItem(
+                            text = { Text("Sort: ${sortOption.displayName}") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Sort,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            },
+                            onClick = {
+                                showTopOverflowMenu = false
+                                showSortDialog = true
+                            },
+                            modifier = Modifier.testTag("sorting_toggle_button")
+                        )
+
+                        // 3. Filters Item
+                        DropdownMenuItem(
+                            text = {
+                                Text(if (activeFilterCount > 0) "Filters ($activeFilterCount active)" else "Filters")
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = null,
+                                    tint = if (activeFilterCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                )
+                            },
+                            onClick = {
+                                showTopOverflowMenu = false
+                                isFilterFlyoutOpen = !isFilterFlyoutOpen
+                                if (isFilterFlyoutOpen) {
+                                    filterFlyoutInteractionTimestamp = System.currentTimeMillis()
+                                }
+                            },
+                            modifier = Modifier.testTag("filter_toggle_button")
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        // 4. Auto-Update Albums with AI
+                        DropdownMenuItem(
+                            text = { Text("Auto-Update Albums with AI") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            onClick = {
+                                showTopOverflowMenu = false
+                                viewModel.autoUpdateAlbumsWithAi()
+                            },
+                            modifier = Modifier.testTag("menu_ai_auto_update_albums")
+                        )
+
+                        // 5. Select Photos
+                        DropdownMenuItem(
+                            text = { Text("Select Photos") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircleOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            },
+                            onClick = {
+                                showTopOverflowMenu = false
+                                val firstPhoto = publicPhotos.firstOrNull()
+                                if (firstPhoto != null) {
+                                    viewModel.togglePhotoSelection(firstPhoto.id)
+                                }
+                            },
+                            modifier = Modifier.testTag("menu_select_photos")
+                        )
+
+                        // 6. Settings
+                        DropdownMenuItem(
+                            text = { Text("Settings") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            },
+                            onClick = {
+                                showTopOverflowMenu = false
+                                onNavigateToSettings()
+                            },
+                            modifier = Modifier.testTag("gallery_settings_button")
+                        )
+
+                        if (activeFilterCount > 0) {
+                            DropdownMenuItem(
+                                text = { Text("Clear All Filters") },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Clear,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                },
+                                onClick = {
+                                    showTopOverflowMenu = false
+                                    viewModel.clearAllFilters()
+                                },
+                                modifier = Modifier.testTag("menu_clear_filters")
+                            )
+                        }
+                    }
                 }
             }
 
@@ -1029,250 +1136,292 @@ fun GalleryScreen(
                     }
                 }
             } else {
-                if (viewMode == ViewMode.GRID) {
-                    LazyVerticalGrid(
-                        state = gridState,
-                        columns = GridCells.Adaptive(minSize = 110.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .testTag("gallery_photo_grid"),
-                        contentPadding = PaddingValues(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        // Iterate and append styled section block headers
-                        groupedPhotos.forEach { (monthStr, photoList) ->
-                            // Header Span
-                            item(span = { GridItemSpan(maxLineSpan) }) {
-                                Text(
-                                    text = if (monthStr == SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(Date())) "Today" else monthStr,
-                                    style = MaterialTheme.typography.titleLarge.copy(
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        fontSize = 20.sp,
-                                        letterSpacing = 0.2.sp
-                                    ),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 16.dp, bottom = 8.dp)
-                                        .testTag("header_$monthStr")
-                                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .pointerInput(viewMode) {
+                            awaitEachGesture {
+                                var startSpan = 0f
+                                var currentSpan = 0f
+                                var isPinching = false
+
+                                do {
+                                    val event = awaitPointerEvent(PointerEventPass.Main)
+                                    val activePointers = event.changes.filter { it.pressed }
+
+                                    if (activePointers.size >= 2) {
+                                        val p1 = activePointers[0].position
+                                        val p2 = activePointers[1].position
+                                        val span = kotlin.math.hypot(p1.x - p2.x, p1.y - p2.y)
+
+                                        if (!isPinching) {
+                                            isPinching = true
+                                            startSpan = span
+                                            currentSpan = span
+                                        } else {
+                                            currentSpan = span
+                                            val ratio = currentSpan / (startSpan.coerceAtLeast(1f))
+                                            if (ratio > 1.25f) {
+                                                // Pinch OUT -> zoom in to larger view
+                                                cycleViewMode(true)
+                                                startSpan = currentSpan
+                                                activePointers.forEach { it.consume() }
+                                            } else if (ratio < 0.75f) {
+                                                // Pinch IN -> zoom out to denser view
+                                                cycleViewMode(false)
+                                                startSpan = currentSpan
+                                                activePointers.forEach { it.consume() }
+                                            }
+                                        }
+                                    } else {
+                                        isPinching = false
+                                    }
+                                } while (event.changes.any { it.pressed })
+                            }
+                        }
+                ) {
+                    when (viewMode) {
+                        ViewMode.GRID, ViewMode.COZY, ViewMode.COMPACT -> {
+                            val columnsCount = when (viewMode) {
+                                ViewMode.COZY -> 2
+                                ViewMode.COMPACT -> 4
+                                else -> 3
+                            }
+                            val spacing = when (viewMode) {
+                                ViewMode.COZY -> 8.dp
+                                ViewMode.COMPACT -> 3.dp
+                                else -> 4.dp
+                            }
+                            val paddingH = when (viewMode) {
+                                ViewMode.COZY -> 12.dp
+                                ViewMode.COMPACT -> 6.dp
+                                else -> 8.dp
                             }
 
-                            // Photo Cards
-                            items(photoList, key = { it.id }) { photo ->
-                                val isSelected = selectedPhotoIds.contains(photo.id)
-                                PhotoGridItem(
-                                    photo = photo,
-                                    isSelected = isSelected,
-                                    isSelectionMode = isSelectionMode,
-                                    isGDriveEnabled = isGDriveEnabled,
-                                    gdriveConnectedEmail = gdriveConnectedEmail,
-                                    onClick = {
-                                        if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
-                                        if (isSelectionMode) {
-                                            viewModel.togglePhotoSelection(photo.id)
-                                        } else {
-                                            onNavigateToDetail(photo)
-                                        }
-                                    },
-                                    onLongClick = {
-                                        if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
-                                        if (!isSelectionMode) {
-                                            activeLongPressedPhoto = photo
-                                            showContextMenu = true
-                                        } else {
-                                            viewModel.togglePhotoSelection(photo.id)
-                                        }
+                            LazyVerticalGrid(
+                                state = gridState,
+                                columns = GridCells.Fixed(columnsCount),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .testTag("gallery_photo_grid"),
+                                contentPadding = PaddingValues(start = paddingH, end = paddingH, top = 4.dp, bottom = 80.dp),
+                                horizontalArrangement = Arrangement.spacedBy(spacing),
+                                verticalArrangement = Arrangement.spacedBy(spacing)
+                            ) {
+                                groupedPhotos.forEach { (monthStr, photoList) ->
+                                    item(span = { GridItemSpan(maxLineSpan) }) {
+                                        Text(
+                                            text = if (monthStr == SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(Date())) "Today" else monthStr,
+                                            style = MaterialTheme.typography.titleLarge.copy(
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                fontSize = 20.sp,
+                                                letterSpacing = 0.2.sp
+                                            ),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(top = 16.dp, bottom = 8.dp)
+                                                .testTag("header_$monthStr")
+                                        )
                                     }
-                                )
+
+                                    items(photoList, key = { it.id }) { photo ->
+                                        val isSelected = selectedPhotoIds.contains(photo.id)
+                                        PhotoGridItem(
+                                            photo = photo,
+                                            isSelected = isSelected,
+                                            isSelectionMode = isSelectionMode,
+                                            isGDriveEnabled = isGDriveEnabled,
+                                            gdriveConnectedEmail = gdriveConnectedEmail,
+                                            onClick = {
+                                                if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
+                                                if (isSelectionMode) {
+                                                    viewModel.togglePhotoSelection(photo.id)
+                                                } else {
+                                                    onNavigateToDetail(photo)
+                                                }
+                                            },
+                                            onLongClick = {
+                                                if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
+                                                if (!isSelectionMode) {
+                                                    activeLongPressedPhoto = photo
+                                                    showContextMenu = true
+                                                } else {
+                                                    viewModel.togglePhotoSelection(photo.id)
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+
+                                item(span = { GridItemSpan(maxLineSpan) }) {
+                                    SecureFolderShortcutCard(onClick = onNavigateToSecureFolder)
+                                }
                             }
                         }
 
-                        // Secure Folder shortcut row at the bottom of the scroll list (aligned with design spec)
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Card(
+                        ViewMode.MASONRY -> {
+                            LazyVerticalStaggeredGrid(
+                                state = staggeredGridState,
+                                columns = StaggeredGridCells.Fixed(2),
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 16.dp)
-                                    .clickable { onNavigateToSecureFolder() }
-                                    .testTag("secure_folder_shortcut_card"),
-                                shape = RoundedCornerShape(24.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = Color(0xFFF7F2FA), // Matches HTML Secure Folder card color exactly
-                                ),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEADDFF))
+                                    .fillMaxSize()
+                                    .testTag("gallery_photo_grid"),
+                                contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 80.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalItemSpacing = 8.dp
                             ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                    ) {
-                                        Box(
+                                groupedPhotos.forEach { (monthStr, photoList) ->
+                                    item(span = StaggeredGridItemSpan.FullLine) {
+                                        Text(
+                                            text = if (monthStr == SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(Date())) "Today" else monthStr,
+                                            style = MaterialTheme.typography.titleLarge.copy(
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                fontSize = 20.sp,
+                                                letterSpacing = 0.2.sp
+                                            ),
                                             modifier = Modifier
-                                                .size(40.dp)
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .background(Color(0xFFD0BCFF)), // Matches HTML icon background
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Lock,
-                                                contentDescription = "Lock",
-                                                tint = Color(0xFF381E72) // Matches HTML icon color
-                                            )
-                                        }
-                                        Column {
-                                            Text(
-                                                text = "Secure Folder",
-                                                style = MaterialTheme.typography.titleMedium.copy(
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    color = Color(0xFF1D1B20),
-                                                    fontSize = 14.sp
-                                                )
-                                            )
-                                            Text(
-                                                text = "Protected by local safety credentials",
-                                                style = MaterialTheme.typography.bodySmall.copy(
-                                                    color = Color(0xFF49454F),
-                                                    fontSize = 12.sp
-                                                )
-                                            )
-                                        }
+                                                .fillMaxWidth()
+                                                .padding(top = 16.dp, bottom = 8.dp)
+                                                .testTag("header_$monthStr")
+                                        )
                                     }
-                                    Icon(
-                                        imageVector = Icons.Default.ChevronRight,
-                                        contentDescription = "Open",
-                                        tint = Color(0xFF49454F)
-                                    )
+
+                                    items(photoList, key = { it.id }) { photo ->
+                                        val isSelected = selectedPhotoIds.contains(photo.id)
+                                        PhotoMasonryItem(
+                                            photo = photo,
+                                            isSelected = isSelected,
+                                            isSelectionMode = isSelectionMode,
+                                            isGDriveEnabled = isGDriveEnabled,
+                                            gdriveConnectedEmail = gdriveConnectedEmail,
+                                            onClick = {
+                                                if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
+                                                if (isSelectionMode) {
+                                                    viewModel.togglePhotoSelection(photo.id)
+                                                } else {
+                                                    onNavigateToDetail(photo)
+                                                }
+                                            },
+                                            onLongClick = {
+                                                if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
+                                                if (!isSelectionMode) {
+                                                    activeLongPressedPhoto = photo
+                                                    showContextMenu = true
+                                                } else {
+                                                    viewModel.togglePhotoSelection(photo.id)
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+
+                                item(span = StaggeredGridItemSpan.FullLine) {
+                                    SecureFolderShortcutCard(onClick = onNavigateToSecureFolder)
+                                }
+                            }
+                        }
+
+                        ViewMode.LIST -> {
+                            LazyColumn(
+                                state = listState,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .testTag("gallery_photo_list"),
+                                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 80.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                groupedPhotos.forEach { (monthStr, photoList) ->
+                                    item {
+                                        Text(
+                                            text = if (monthStr == SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(Date())) "Today" else monthStr,
+                                            style = MaterialTheme.typography.titleLarge.copy(
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                fontSize = 20.sp,
+                                                letterSpacing = 0.2.sp
+                                            ),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(top = 16.dp, bottom = 8.dp)
+                                                .testTag("list_header_$monthStr")
+                                        )
+                                    }
+
+                                    items(photoList, key = { it.id }) { photo ->
+                                        val isSelected = selectedPhotoIds.contains(photo.id)
+                                        PhotoListItem(
+                                            photo = photo,
+                                            isSelected = isSelected,
+                                            isSelectionMode = isSelectionMode,
+                                            isGDriveEnabled = isGDriveEnabled,
+                                            gdriveConnectedEmail = gdriveConnectedEmail,
+                                            onClick = {
+                                                if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
+                                                if (isSelectionMode) {
+                                                    viewModel.togglePhotoSelection(photo.id)
+                                                } else {
+                                                    onNavigateToDetail(photo)
+                                                }
+                                            },
+                                            onLongClick = {
+                                                if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
+                                                if (!isSelectionMode) {
+                                                    activeLongPressedPhoto = photo
+                                                    showContextMenu = true
+                                                } else {
+                                                    viewModel.togglePhotoSelection(photo.id)
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+
+                                item {
+                                    SecureFolderShortcutCard(onClick = onNavigateToSecureFolder)
                                 }
                             }
                         }
                     }
-                } else {
-                    LazyColumn(
-                        state = listState,
+
+                    // Floating HUD indicator when pinch or view changes
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = viewModeHudMessage != null,
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically(),
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .testTag("gallery_photo_list"),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                            .align(Alignment.TopCenter)
+                            .padding(top = 16.dp)
                     ) {
-                        groupedPhotos.forEach { (monthStr, photoList) ->
-                            item {
-                                Text(
-                                    text = if (monthStr == SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(Date())) "Today" else monthStr,
-                                    style = MaterialTheme.typography.titleLarge.copy(
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        fontSize = 20.sp,
-                                        letterSpacing = 0.2.sp
-                                    ),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 16.dp, bottom = 8.dp)
-                                        .testTag("list_header_$monthStr")
-                                )
-                            }
-
-                            items(photoList, key = { it.id }) { photo ->
-                                val isSelected = selectedPhotoIds.contains(photo.id)
-                                PhotoListItem(
-                                    photo = photo,
-                                    isSelected = isSelected,
-                                    isSelectionMode = isSelectionMode,
-                                    isGDriveEnabled = isGDriveEnabled,
-                                    gdriveConnectedEmail = gdriveConnectedEmail,
-                                    onClick = {
-                                        if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
-                                        if (isSelectionMode) {
-                                            viewModel.togglePhotoSelection(photo.id)
-                                        } else {
-                                            onNavigateToDetail(photo)
-                                        }
-                                    },
-                                    onLongClick = {
-                                        if (isFilterFlyoutOpen) isFilterFlyoutOpen = false
-                                        if (!isSelectionMode) {
-                                            activeLongPressedPhoto = photo
-                                            showContextMenu = true
-                                        } else {
-                                            viewModel.togglePhotoSelection(photo.id)
-                                        }
-                                    }
-                                )
-                            }
-                        }
-
-                        // Secure Folder Shortcut Row (List Mode)
-                        item {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 16.dp)
-                                    .clickable { onNavigateToSecureFolder() }
-                                    .testTag("secure_folder_shortcut_card_list"),
-                                shape = RoundedCornerShape(24.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = Color(0xFFF7F2FA)
-                                ),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEADDFF))
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.92f),
+                            contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+                            shadowElevation = 6.dp,
+                            modifier = Modifier.testTag("view_mode_hud_pill")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(40.dp)
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .background(Color(0xFFD0BCFF)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Lock,
-                                                contentDescription = "Lock",
-                                                tint = Color(0xFF381E72)
-                                            )
-                                        }
-                                        Column {
-                                            Text(
-                                                text = "Secure Folder",
-                                                style = MaterialTheme.typography.titleMedium.copy(
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    color = Color(0xFF1D1B20),
-                                                    fontSize = 14.sp
-                                                )
-                                            )
-                                            Text(
-                                                text = "Protected by local safety credentials",
-                                                style = MaterialTheme.typography.bodySmall.copy(
-                                                    color = Color(0xFF49454F),
-                                                    fontSize = 12.sp
-                                                )
-                                            )
-                                        }
-                                    }
-                                    Icon(
-                                        imageVector = Icons.Default.ChevronRight,
-                                        contentDescription = "Open",
-                                        tint = Color(0xFF49454F)
-                                    )
-                                }
+                                Icon(
+                                    imageVector = when (viewMode) {
+                                        ViewMode.GRID -> Icons.Default.GridView
+                                        ViewMode.MASONRY -> Icons.Default.Dashboard
+                                        ViewMode.COZY -> Icons.Default.ViewAgenda
+                                        ViewMode.COMPACT -> Icons.Default.Apps
+                                        ViewMode.LIST -> Icons.Default.ViewList
+                                    },
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = viewModeHudMessage ?: "",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                )
                             }
                         }
                     }
@@ -2038,6 +2187,188 @@ fun GalleryScreen(
             )
         }
 
+        if (showViewModeDialog) {
+            AlertDialog(
+                onDismissRequest = { showViewModeDialog = false },
+                modifier = Modifier.testTag("view_mode_dialog"),
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.GridView,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                },
+                title = {
+                    Text(
+                        text = "Choose View Style",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "Tip: You can also pinch in/out anywhere in the gallery to quickly switch views!",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+
+                        ViewMode.values().forEach { mode ->
+                            val isSelected = viewMode == mode
+                            Surface(
+                                onClick = {
+                                    viewModel.updateViewMode(mode)
+                                    showViewModeDialog = false
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("view_mode_option_${mode.name}")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(
+                                            imageVector = when (mode) {
+                                                ViewMode.GRID -> Icons.Default.GridView
+                                                ViewMode.MASONRY -> Icons.Default.Dashboard
+                                                ViewMode.COZY -> Icons.Default.ViewAgenda
+                                                ViewMode.COMPACT -> Icons.Default.Apps
+                                                ViewMode.LIST -> Icons.Default.ViewList
+                                            },
+                                            contentDescription = null,
+                                            tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                        Column {
+                                            Text(
+                                                text = mode.label,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = when (mode) {
+                                                    ViewMode.GRID -> "Standard 3-column square grid"
+                                                    ViewMode.MASONRY -> "Pinterest-style staggered aspect ratios"
+                                                    ViewMode.COZY -> "Large 2-column spacious view"
+                                                    ViewMode.COMPACT -> "Dense 4-column overview"
+                                                    ViewMode.LIST -> "Detailed rows with file info"
+                                                },
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    RadioButton(
+                                        selected = isSelected,
+                                        onClick = {
+                                            viewModel.updateViewMode(mode)
+                                            showViewModeDialog = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = { showViewModeDialog = false },
+                        modifier = Modifier.testTag("close_view_mode_dialog")
+                    ) {
+                        Text("Done")
+                    }
+                }
+            )
+        }
+
+        if (showSortDialog) {
+            AlertDialog(
+                onDismissRequest = { showSortDialog = false },
+                modifier = Modifier.testTag("sort_dialog"),
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.Sort,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                },
+                title = {
+                    Text(
+                        text = "Sort Photos By",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        GallerySortOption.values().forEach { option ->
+                            val isSelected = sortOption == option
+                            Surface(
+                                onClick = {
+                                    viewModel.updateSortOption(option)
+                                    showSortDialog = false
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("sort_option_${option.name}")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = option.displayName,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    RadioButton(
+                                        selected = isSelected,
+                                        onClick = {
+                                            viewModel.updateSortOption(option)
+                                            showSortDialog = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = { showSortDialog = false },
+                        modifier = Modifier.testTag("close_sort_dialog")
+                    ) {
+                        Text("Done")
+                    }
+                }
+            )
+        }
+
         if (showSingleFileDetailsDialog != null) {
             Dialog(
                 onDismissRequest = { showSingleFileDetailsDialog = null },
@@ -2213,9 +2544,74 @@ fun GalleryScreen(
     }
 }
 
+@Composable
+fun SecureFolderShortcutCard(onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 16.dp)
+            .clickable { onClick() }
+            .testTag("secure_folder_shortcut_card"),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFF7F2FA)
+        ),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEADDFF))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFFD0BCFF)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Lock",
+                        tint = Color(0xFF381E72)
+                    )
+                }
+                Column {
+                    Text(
+                        text = "Secure Folder",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF1D1B20),
+                            fontSize = 14.sp
+                        )
+                    )
+                    Text(
+                        text = "Protected by local safety credentials",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = Color(0xFF49454F),
+                            fontSize = 12.sp
+                        )
+                    )
+                }
+            }
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = "Open",
+                tint = Color(0xFF49454F)
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun PhotoGridItem(
+fun PhotoMasonryItem(
     photo: Photo,
     isSelected: Boolean = false,
     isSelectionMode: Boolean = false,
@@ -2228,14 +2624,25 @@ fun PhotoGridItem(
     val isVideo = remember(photo.tags) {
         photo.tags.split(",").map { it.trim().lowercase() }.contains("video")
     }
+    val aspectRatio = remember(photo.id, photo.width, photo.height) {
+        if (photo.width > 0 && photo.height > 0) {
+            (photo.width.toFloat() / photo.height.toFloat()).coerceIn(0.65f, 1.55f)
+        } else {
+            val variants = listOf(0.75f, 1.0f, 1.33f, 0.82f, 1.25f, 0.68f)
+            val index = Math.abs(photo.id.hashCode()) % variants.size
+            variants[index]
+        }
+    }
+
     Card(
         modifier = Modifier
-            .aspectRatio(1f)
-            .clip(RoundedCornerShape(16.dp))
+            .fillMaxWidth()
+            .aspectRatio(aspectRatio)
+            .clip(RoundedCornerShape(10.dp))
             .border(
-                width = if (isSelected) 3.dp else 1.dp,
-                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                shape = RoundedCornerShape(16.dp)
+                width = if (isSelected) 3.dp else 0.5.dp,
+                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
+                shape = RoundedCornerShape(10.dp)
             )
             .combinedClickable(
                 onClick = onClick,
@@ -2244,7 +2651,8 @@ fun PhotoGridItem(
             .testTag("photo_item_card_${photo.id}"),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             val cropRect = getCropRectFromTags(photo.tags)
@@ -2271,21 +2679,93 @@ fun PhotoGridItem(
                 contentScale = if (cropRect != null) ContentScale.FillBounds else ContentScale.Crop
             )
 
+            // Video indicator: Clean, small badge at bottom-start
             if (isVideo) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color.Black.copy(alpha = 0.6f),
+                    contentColor = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Video",
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+                }
+            }
+
+            // Favorite indicator: Clean small heart at bottom-end
+            if (photo.isFavorite) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x99000000))
-                        .align(Alignment.Center),
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .size(18.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = "Video file indicator",
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
+                        imageVector = Icons.Default.Favorite,
+                        contentDescription = "Favorite",
+                        tint = Color(0xFFFF4D4D),
+                        modifier = Modifier.size(11.dp)
                     )
+                }
+            }
+
+            // Top Status corner symbols (Cloud & Lock)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (isGDriveEnabled && !gdriveConnectedEmail.isNullOrBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .size(18.dp)
+                            .background(
+                                if (photo.isSynced) Color(0xCC0F766E) else Color(0xCC7C2D12),
+                                CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (photo.isSynced) Icons.Default.Check else Icons.Default.CloudQueue,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(10.dp)
+                        )
+                    }
+                } else {
+                    Spacer(modifier = Modifier.size(1.dp))
+                }
+
+                if (photo.isLocked) {
+                    Box(
+                        modifier = Modifier
+                            .size(18.dp)
+                            .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = "Encrypted",
+                            tint = Color.White,
+                            modifier = Modifier.size(10.dp)
+                        )
+                    }
                 }
             }
 
@@ -2295,7 +2775,7 @@ fun PhotoGridItem(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(
-                            if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                            if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
                             else Color(0x33000000)
                         )
                 )
@@ -2304,8 +2784,8 @@ fun PhotoGridItem(
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(8.dp)
-                        .size(24.dp)
+                        .padding(6.dp)
+                        .size(22.dp)
                         .clip(CircleShape)
                         .background(
                             if (isSelected) MaterialTheme.colorScheme.primary else Color(0x66000000)
@@ -2323,32 +2803,125 @@ fun PhotoGridItem(
                     }
                 }
             }
+        }
+    }
+}
 
-            // Absolute corner tags overlays
-            Box(
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun PhotoGridItem(
+    photo: Photo,
+    isSelected: Boolean = false,
+    isSelectionMode: Boolean = false,
+    isGDriveEnabled: Boolean = false,
+    gdriveConnectedEmail: String? = null,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    val isVideo = remember(photo.tags) {
+        photo.tags.split(",").map { it.trim().lowercase() }.contains("video")
+    }
+    Card(
+        modifier = Modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .border(
+                width = if (isSelected) 3.dp else 0.5.dp,
+                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
+                shape = RoundedCornerShape(8.dp)
+            )
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+            .testTag("photo_item_card_${photo.id}"),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            val cropRect = getCropRectFromTags(photo.tags)
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(photo.imageUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = photo.title,
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color(0x99000000))
-                        )
-                    )
+                    .graphicsLayer {
+                        if (cropRect != null) {
+                            val cropW = cropRect.right - cropRect.left
+                            val cropH = cropRect.bottom - cropRect.top
+                            scaleX = 1f / cropW
+                            scaleY = 1f / cropH
+                            translationX = -((cropRect.left + cropRect.right) / 2f - 0.5f) * size.width * (1f / cropW)
+                            translationY = -((cropRect.top + cropRect.bottom) / 2f - 0.5f) * size.height * (1f / cropH)
+                        }
+                        rotationZ = getRotationFromTags(photo.tags)
+                    },
+                colorFilter = getColorMatrixFromTags(photo.tags)?.let { androidx.compose.ui.graphics.ColorFilter.colorMatrix(it) },
+                contentScale = if (cropRect != null) ContentScale.FillBounds else ContentScale.Crop
             )
 
-            // Top Status corner symbols
+            // Video indicator: Clean, small badge at bottom-start
+            if (isVideo) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color.Black.copy(alpha = 0.6f),
+                    contentColor = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Video",
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+                }
+            }
+
+            // Favorite indicator: Clean small heart at bottom-end
+            if (photo.isFavorite) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .size(18.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Favorite,
+                        contentDescription = "Favorite",
+                        tint = Color(0xFFFF4D4D),
+                        modifier = Modifier.size(11.dp)
+                    )
+                }
+            }
+
+            // Top Status corner symbols (Cloud & Lock)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.TopEnd)
-                    .padding(8.dp),
+                    .padding(6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left cloud status badge icon
                 if (isGDriveEnabled && !gdriveConnectedEmail.isNullOrBlank()) {
                     Box(
                         modifier = Modifier
-                            .size(20.dp)
+                            .size(18.dp)
                             .background(
                                 if (photo.isSynced) Color(0xCC0F766E) else Color(0xCC7C2D12),
                                 CircleShape
@@ -2362,66 +2935,59 @@ fun PhotoGridItem(
                             modifier = Modifier.size(10.dp)
                         )
                     }
+                } else {
+                    Spacer(modifier = Modifier.size(1.dp))
                 }
 
-                // If locked, show key lock
                 if (photo.isLocked) {
                     Box(
                         modifier = Modifier
-                            .size(20.dp)
-                            .background(Color(0xCCE0A96D), CircleShape),
+                            .size(18.dp)
+                            .background(Color.Black.copy(alpha = 0.5f), CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.Lock,
                             contentDescription = "Encrypted",
-                            tint = Color.Black,
+                            tint = Color.White,
                             modifier = Modifier.size(10.dp)
                         )
                     }
                 }
             }
 
-            // Bottom title metadata strip
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth()
-                    .padding(10.dp)
-            ) {
-                Text(
-                    text = photo.title,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = photo.location,
-                    color = Color(0xFFCBD5E1),
-                    fontSize = 9.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            if (!isSelectionMode) {
-                IconButton(
-                    onClick = { onLongClick() },
+            // Dim and Select Check Overlay
+            if (isSelectionMode) {
+                Box(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(4.dp)
-                        .size(28.dp)
-                        .background(Color(0x99000000), CircleShape)
-                        .testTag("photo_menu_btn_${photo.id}")
+                        .fillMaxSize()
+                        .background(
+                            if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                            else Color(0x33000000)
+                        )
+                )
+
+                // Render check indicator at top left of photo
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (isSelected) MaterialTheme.colorScheme.primary else Color(0x66000000)
+                        )
+                        .border(1.5.dp, Color.White, CircleShape),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "Options Menu",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp)
-                    )
+                    if (isSelected) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Selected status",
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
                 }
             }
         }

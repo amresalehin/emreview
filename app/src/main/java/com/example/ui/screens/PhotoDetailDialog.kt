@@ -42,6 +42,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import android.widget.Toast
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.viewinterop.AndroidView
 import android.widget.VideoView
@@ -555,34 +563,54 @@ fun ZoomableAsyncImage(
     title: String,
     currentPage: Int,
     tags: String = "",
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onZoomChanged: ((Boolean) -> Unit)? = null
 ) {
     val context = LocalContext.current
-    var scale by remember(currentPage) { mutableStateOf(1f) }
+    var scale by remember(currentPage) { mutableFloatStateOf(1f) }
     var offset by remember(currentPage) { mutableStateOf(Offset.Zero) }
 
-    val baseModifier = Modifier
+    // If back pressed while zoomed in, reset zoom back to 1x first
+    BackHandler(enabled = scale > 1.05f) {
+        scale = 1f
+        offset = Offset.Zero
+        onZoomChanged?.invoke(false)
+    }
+
+    val gestureModifier = Modifier
         .fillMaxSize()
         .clip(RectangleShape)
-        .combinedClickable(
-            onDoubleClick = {
-                if (scale > 1f) {
-                    scale = 1f
-                    offset = Offset.Zero
-                } else {
-                    scale = 2.5f
-                    offset = Offset.Zero
+        .pointerInput(currentPage) {
+            detectTapGestures(
+                onDoubleTap = { tapOffset ->
+                    if (scale > 1.05f) {
+                        scale = 1f
+                        offset = Offset.Zero
+                        onZoomChanged?.invoke(false)
+                    } else {
+                        scale = 2.5f
+                        val maxOffsetX = (size.width * 1.5f) / 2f
+                        val maxOffsetY = (size.height * 1.5f) / 2f
+                        offset = Offset(
+                            x = ((size.width / 2f - tapOffset.x) * 1.5f).coerceIn(-maxOffsetX, maxOffsetX),
+                            y = ((size.height / 2f - tapOffset.y) * 1.5f).coerceIn(-maxOffsetY, maxOffsetY)
+                        )
+                        onZoomChanged?.invoke(true)
+                    }
+                },
+                onTap = {
+                    onClick()
                 }
-            },
-            onClick = onClick
-        )
-
-    val finalModifier = if (scale > 1f) {
-        baseModifier.pointerInput(currentPage) {
-            detectTransformGestures { _, pan, zoom, _ ->
+            )
+        }
+        .pointerInput(currentPage) {
+            detectTransformGestures(panZoomLock = true) { _, pan, zoom, _ ->
                 val newScale = (scale * zoom).coerceIn(1f, 5f)
                 scale = newScale
-                if (newScale > 1f) {
+                val isZoomed = newScale > 1.05f
+                onZoomChanged?.invoke(isZoomed)
+
+                if (isZoomed) {
                     val maxOffsetX = (size.width * (newScale - 1f)) / 2f
                     val maxOffsetY = (size.height * (newScale - 1f)) / 2f
                     offset = Offset(
@@ -594,12 +622,9 @@ fun ZoomableAsyncImage(
                 }
             }
         }
-    } else {
-        baseModifier
-    }
 
     Box(
-        modifier = finalModifier,
+        modifier = gestureModifier,
         contentAlignment = Alignment.Center
     ) {
         val cropRect = getCropRectFromTags(tags)
@@ -773,6 +798,48 @@ fun ZoomableAsyncImage(
     }
 }
 
+@Composable
+private fun DetailActionButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    iconTint: Color = Color.White,
+    testTag: String = ""
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .then(if (testTag.isNotEmpty()) Modifier.testTag(testTag) else Modifier)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = iconTint,
+            modifier = Modifier.size(22.dp)
+        )
+        Spacer(modifier = Modifier.height(3.dp))
+        Text(
+            text = label,
+            color = iconTint.copy(alpha = 0.9f),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+        )
+    }
+}
+
+fun formatVideoDuration(ms: Int): String {
+    val totalSeconds = (ms / 1000).coerceAtLeast(0)
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return String.format(Locale.US, "%02d:%02d", minutes, seconds)
+}
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun PhotoDetailDialog(
@@ -793,6 +860,8 @@ fun PhotoDetailDialog(
     onPhotoChanged: ((Photo) -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val clipboardManager = LocalClipboardManager.current
     
     if (photos.isEmpty()) {
         LaunchedEffect(Unit) {
@@ -822,18 +891,47 @@ fun PhotoDetailDialog(
         }
     }
 
-    val dateText = remember(photo.dateAdded) {
-        val sdf = SimpleDateFormat("EEEE, d MMMM yyyy - HH:mm", Locale.getDefault())
+    val dateFullText = remember(photo.dateAdded) {
+        val sdf = SimpleDateFormat("EEEE, d MMMM yyyy • HH:mm", Locale.getDefault())
+        sdf.format(Date(photo.dateAdded))
+    }
+    val dateText = dateFullText
+    val dateSubtitleText = remember(photo.dateAdded) {
+        val sdf = SimpleDateFormat("MMM d, yyyy • HH:mm", Locale.getDefault())
         sdf.format(Date(photo.dateAdded))
     }
 
+    var areControlsVisible by remember { mutableStateOf(true) }
+    var isCurrentPageZoomed by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var showDetailsDialog by remember { mutableStateOf(false) }
     var showFileDetailsDialog by remember { mutableStateOf(false) }
     var showMoveToAlbumDialog by remember { mutableStateOf(false) }
     var showMoveToFolderDialog by remember { mutableStateOf(false) }
     var showEditorDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var isSlideshowActive by remember { mutableStateOf(false) }
+
+    // Reset zoom state on page change
+    LaunchedEffect(pagerState.currentPage) {
+        isCurrentPageZoomed = false
+    }
+
+    BackHandler {
+        if (showDeleteConfirmDialog) {
+            showDeleteConfirmDialog = false
+        } else if (showDetailsDialog) {
+            showDetailsDialog = false
+        } else if (showFileDetailsDialog) {
+            showFileDetailsDialog = false
+        } else if (showMoveToAlbumDialog) {
+            showMoveToAlbumDialog = false
+        } else if (showMoveToFolderDialog) {
+            showMoveToFolderDialog = false
+        } else {
+            onDismiss()
+        }
+    }
 
     if (isSlideshowActive) {
         LaunchedEffect(pagerState.currentPage) {
@@ -866,7 +964,8 @@ fun PhotoDetailDialog(
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
-                pageSpacing = 16.dp
+                pageSpacing = 16.dp,
+                userScrollEnabled = !isCurrentPageZoomed
             ) { pageIndex ->
                 val pagePhoto = photos.getOrNull(pageIndex)
                 if (pagePhoto != null) {
@@ -874,57 +973,205 @@ fun PhotoDetailDialog(
                         pagePhoto.tags.split(",").map { it.trim().lowercase() }.contains("video")
                     }
                     var isPlayingVideo by remember(pagePhoto.id) { mutableStateOf(false) }
+                    var isVideoPaused by remember(pagePhoto.id) { mutableStateOf(false) }
+                    var videoDurationMs by remember(pagePhoto.id) { mutableIntStateOf(0) }
+                    var videoCurrentPosMs by remember(pagePhoto.id) { mutableIntStateOf(0) }
+                    var videoViewRef by remember(pagePhoto.id) { mutableStateOf<VideoView?>(null) }
+                    var isVideoControlsVisible by remember(pagePhoto.id) { mutableStateOf(true) }
+
+                    LaunchedEffect(isPlayingVideo, isVideoPaused) {
+                        while (isPlayingVideo && !isVideoPaused) {
+                            videoViewRef?.let {
+                                if (it.isPlaying) {
+                                    videoCurrentPosMs = it.currentPosition
+                                }
+                            }
+                            kotlinx.coroutines.delay(200)
+                        }
+                    }
 
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
                     ) {
                         if (isVideo && isPlayingVideo) {
-                            AndroidView(
-                                factory = { ctx ->
-                                    VideoView(ctx).apply {
-                                        setVideoURI(Uri.parse(pagePhoto.imageUrl))
-                                        val mediaController = MediaController(ctx)
-                                        mediaController.setAnchorView(this)
-                                        setMediaController(mediaController)
-                                        setOnPreparedListener { mp ->
-                                            mp.isLooping = true
-                                            start()
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clickable {
+                                        isVideoControlsVisible = !isVideoControlsVisible
+                                        areControlsVisible = isVideoControlsVisible
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                AndroidView(
+                                    factory = { ctx ->
+                                        VideoView(ctx).apply {
+                                            setVideoURI(Uri.parse(pagePhoto.imageUrl))
+                                            setOnPreparedListener { mp ->
+                                                mp.isLooping = true
+                                                videoDurationMs = mp.duration
+                                                start()
+                                                isVideoPaused = false
+                                            }
+                                            setOnCompletionListener {
+                                                isVideoPaused = true
+                                            }
+                                            videoViewRef = this
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxSize(0.95f)
+                                )
+
+                                // Sleek custom modern video player controls overlay
+                                AnimatedVisibility(
+                                    visible = isVideoControlsVisible,
+                                    enter = fadeIn(),
+                                    exit = fadeOut(),
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color(0x44000000))
+                                    ) {
+                                        // Center Play/Pause circular action
+                                        IconButton(
+                                            onClick = {
+                                                videoViewRef?.let {
+                                                    if (it.isPlaying) {
+                                                        it.pause()
+                                                        isVideoPaused = true
+                                                    } else {
+                                                        it.start()
+                                                        isVideoPaused = false
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .align(Alignment.Center)
+                                                .size(72.dp)
+                                                .background(Color(0x99000000), CircleShape)
+                                                .border(2.dp, Color(0x66FFFFFF), CircleShape)
+                                                .testTag("video_play_pause_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isVideoPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                                contentDescription = if (isVideoPaused) "Play" else "Pause",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(40.dp)
+                                            )
+                                        }
+
+                                        // Top-right exit video player button
+                                        IconButton(
+                                            onClick = {
+                                                videoViewRef?.stopPlayback()
+                                                isPlayingVideo = false
+                                            },
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(top = 70.dp, end = 16.dp)
+                                                .background(Color(0x99000000), CircleShape)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Close Player",
+                                                tint = Color.White
+                                            )
+                                        }
+
+                                        // Bottom scrubber bar
+                                        Surface(
+                                            shape = RoundedCornerShape(20.dp),
+                                            color = Color(0xDD0F172A),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFFFFF)),
+                                            modifier = Modifier
+                                                .align(Alignment.BottomCenter)
+                                                .padding(horizontal = 20.dp, vertical = 90.dp)
+                                                .fillMaxWidth()
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                IconButton(
+                                                    onClick = {
+                                                        videoViewRef?.seekTo(0)
+                                                        videoViewRef?.start()
+                                                        isVideoPaused = false
+                                                    },
+                                                    modifier = Modifier.size(36.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Replay,
+                                                        contentDescription = "Restart Video",
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                }
+
+                                                val progress = if (videoDurationMs > 0) {
+                                                    (videoCurrentPosMs.toFloat() / videoDurationMs.toFloat()).coerceIn(0f, 1f)
+                                                } else 0f
+
+                                                Slider(
+                                                    value = progress,
+                                                    onValueChange = { frac ->
+                                                        val seekTarget = (frac * videoDurationMs).toInt()
+                                                        videoCurrentPosMs = seekTarget
+                                                        videoViewRef?.seekTo(seekTarget)
+                                                    },
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .padding(horizontal = 8.dp),
+                                                    colors = SliderDefaults.colors(
+                                                        thumbColor = MaterialTheme.colorScheme.primary,
+                                                        activeTrackColor = MaterialTheme.colorScheme.primary,
+                                                        inactiveTrackColor = Color(0x44FFFFFF)
+                                                    )
+                                                )
+
+                                                val curSec = (videoCurrentPosMs / 1000).coerceAtLeast(0)
+                                                val durSec = (videoDurationMs / 1000).coerceAtLeast(0)
+                                                Text(
+                                                    text = String.format(Locale.US, "%02d:%02d / %02d:%02d", curSec / 60, curSec % 60, durSec / 60, durSec % 60),
+                                                    color = Color.White,
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontWeight = FontWeight.Medium,
+                                                        fontSize = 11.sp
+                                                    )
+                                                )
+                                            }
                                         }
                                     }
-                                },
-                                modifier = Modifier.fillMaxSize(0.95f)
-                            )
-
-                            // Sleek close video overlay button
-                            IconButton(
-                                onClick = { isPlayingVideo = false },
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(top = 80.dp, end = 16.dp)
-                                    .background(Color(0x99000000), CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Close Player",
-                                    tint = Color.White
-                                )
+                                }
                             }
                         } else {
+                            // Photo or Video Thumbnail
                             ZoomableAsyncImage(
                                 imageUrl = pagePhoto.imageUrl,
                                 title = pagePhoto.title,
                                 currentPage = pagerState.currentPage,
                                 tags = pagePhoto.tags,
-                                onClick = onDismiss
+                                onClick = {
+                                    areControlsVisible = !areControlsVisible
+                                },
+                                onZoomChanged = { isZoomed ->
+                                    if (pageIndex == pagerState.currentPage) {
+                                        isCurrentPageZoomed = isZoomed
+                                    }
+                                }
                             )
-                            
+
                             if (isVideo) {
+                                // Prominent Video Play Overlay
                                 Box(
                                     modifier = Modifier
-                                        .size(64.dp)
+                                        .size(76.dp)
                                         .clip(CircleShape)
-                                        .background(Color(0x99000000))
+                                        .background(Color(0xB30F172A))
+                                        .border(2.5.dp, Color(0x88FFFFFF), CircleShape)
                                         .clickable { isPlayingVideo = true },
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -932,8 +1179,36 @@ fun PhotoDetailDialog(
                                         imageVector = Icons.Default.PlayArrow,
                                         contentDescription = "Play Video Content",
                                         tint = Color.White,
-                                        modifier = Modifier.size(36.dp)
+                                        modifier = Modifier.size(44.dp)
                                     )
+                                }
+
+                                // Video badge indicator
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = Color(0xCC000000),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x44FFFFFF)),
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(top = 80.dp, end = 20.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Videocam,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            "VIDEO",
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -941,462 +1216,698 @@ fun PhotoDetailDialog(
                 }
             }
 
-            // Sleek dynamic header with back, title info, and modern 3-dot overflow menu
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color(0xCC000000), Color.Transparent)
-                        )
-                    )
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // Sleek immersive top bar
+            AnimatedVisibility(
+                visible = areControlsVisible,
+                enter = fadeIn() + slideInVertically { -it },
+                exit = fadeOut() + slideOutVertically { -it },
+                modifier = Modifier.align(Alignment.TopCenter)
             ) {
-                // Left Back Gesture Escape Point
-                IconButton(
-                    onClick = onDismiss,
+                Row(
                     modifier = Modifier
-                        .background(Color(0x33FFFFFF), CircleShape)
-                        .size(40.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ArrowBack,
-                        contentDescription = "Back to Stream",
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-
-                // Centered dynamic metadata label indicators
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 16.dp),
-                    horizontalAlignment = Alignment.Start
-                ) {
-                    Text(
-                        text = photo.title,
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
-                        ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (photo.location.isNotBlank()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.LocationOn,
-                                contentDescription = "Geotag icon location",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = photo.location,
-                                color = Color(0xFFCBD5E1),
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-
-                // Favorite Toggle button
-                IconButton(
-                    onClick = { onToggleFavorite(photo) },
-                    modifier = Modifier
-                        .background(Color(0x33FFFFFF), CircleShape)
-                        .size(40.dp)
-                        .testTag("detail_favorite_button")
-                ) {
-                    Icon(
-                        imageVector = if (photo.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        contentDescription = "Toggle Favorite",
-                        tint = if (photo.isFavorite) Color.Red else Color.White,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-
-                // Play/Pause Slideshow Trigger
-                IconButton(
-                    onClick = { isSlideshowActive = !isSlideshowActive },
-                    modifier = Modifier
+                        .fillMaxWidth()
                         .background(
-                            if (isSlideshowActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f) 
-                            else Color(0x33FFFFFF), 
-                            CircleShape
+                            Brush.verticalGradient(
+                                colors = listOf(Color(0xEE06090F), Color(0x99000000), Color.Transparent)
+                            )
                         )
-                        .size(40.dp)
+                        .statusBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = if (isSlideshowActive) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = "Toggle Slideshow",
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-
-                // Creative Media Editor Trigger
-                IconButton(
-                    onClick = { showEditorDialog = true },
-                    modifier = Modifier
-                        .background(Color(0x33FFFFFF), CircleShape)
-                        .size(40.dp)
-                        .testTag("detail_edit_media_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "Edit Creative Media",
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-
-                // Native Share Actions Trigger
-                IconButton(
-                    onClick = { sharePhotoNatively(context, photo) },
-                    modifier = Modifier
-                        .background(Color(0x33FFFFFF), CircleShape)
-                        .size(40.dp)
-                        .testTag("detail_native_share_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Share,
-                        contentDescription = "Native Share File",
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-
-                // Modern Three-dots overflow actions trigger
-                Box {
+                    // Back Button
                     IconButton(
-                        onClick = { showMenu = true },
+                        onClick = onDismiss,
                         modifier = Modifier
                             .background(Color(0x33FFFFFF), CircleShape)
-                            .size(40.dp)
-                            .testTag("detail_three_dots_button")
+                            .size(42.dp)
+                            .testTag("detail_back_button")
                     ) {
                         Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "Smart Actions Dropdown",
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Back to Stream",
                             tint = Color.White,
                             modifier = Modifier.size(22.dp)
                         )
                     }
 
-                    // Floating action block items tucked inside standard dropdown
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false },
-                        modifier = Modifier.background(MaterialTheme.colorScheme.surface)
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Edit Media Elements") },
-                            onClick = {
-                                showMenu = false
-                                showEditorDialog = true
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Edit,
-                                    contentDescription = "Edit media asset elements",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            },
-                            modifier = Modifier.testTag("menu_btn_edit_media")
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Share File Natively") },
-                            onClick = {
-                                showMenu = false
-                                sharePhotoNatively(context, photo)
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Share,
-                                    contentDescription = "Native share asset",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            },
-                            modifier = Modifier.testTag("menu_btn_native_share")
-                        )
-                        DropdownMenuItem(
-                            text = { Text("View Smart Details") },
-                            onClick = {
-                                showMenu = false
-                                showDetailsDialog = true
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Info,
-                                    contentDescription = "Details logo",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            },
-                            modifier = Modifier.testTag("menu_btn_info")
-                        )
-
-                        DropdownMenuItem(
-                            text = { Text("View File Details") },
-                            onClick = {
-                                showMenu = false
-                                showFileDetailsDialog = true
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Description,
-                                    contentDescription = "File system details logo",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            },
-                            modifier = Modifier.testTag("menu_btn_file_details")
-                        )
-
-                        DropdownMenuItem(
-                            text = { Text("Move to Album...") },
-                            onClick = {
-                                showMenu = false
-                                showMoveToAlbumDialog = true
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Collections,
-                                    contentDescription = "Move to album",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            },
-                            modifier = Modifier.testTag("menu_btn_move_to_album")
-                        )
-
-                        DropdownMenuItem(
-                            text = { Text("Move to Folder...") },
-                            onClick = {
-                                showMenu = false
-                                showMoveToFolderDialog = true
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.FolderOpen,
-                                    contentDescription = "Move to folder",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            },
-                            modifier = Modifier.testTag("menu_btn_move_to_folder")
-                        )
-
-                        DropdownMenuItem(
-                            text = { Text(if (photo.isLocked) "Decrypt to Gallery" else "Lock in Secure Vault") },
-                            onClick = {
-                                showMenu = false
-                                onToggleLock(photo)
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = if (photo.isLocked) Icons.Default.LockOpen else Icons.Default.Lock,
-                                    contentDescription = "Lock secure action",
-                                    tint = MaterialTheme.colorScheme.secondary
-                                )
-                            },
-                            modifier = Modifier.testTag("menu_btn_lock")
-                        )
-
-                        DropdownMenuItem(
-                            text = { Text("Delete Permanently", color = MaterialTheme.colorScheme.error) },
-                            onClick = {
-                                showMenu = false
-                                onDelete(photo)
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "Delete permanently action",
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            },
-                            modifier = Modifier.testTag("menu_btn_delete")
-                        )
-                    }
-                }
-            }
-
-            // Sleek indicator page indexer overlay at bottom center to visualize swiping progress
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.BottomCenter)
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color(0x99000000))
-                        )
-                    )
-                    .navigationBarsPadding()
-                    .padding(bottom = 24.dp, top = 16.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "${currentPhotoIndex + 1} of ${photos.size}",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontWeight = FontWeight.SemiBold
-                    )
-                )
-            }
-
-            // Modal popup dialog containing all the "additional details" (Description, Smart Labels/Tags, Timestamp)
-            if (showDetailsDialog) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.6f))
-                        .clickable { showDetailsDialog = false },
-                    contentAlignment = Alignment.Center
-                ) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp)
-                    .clickable(
-                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                        indication = null
-                    ) {}
-                    .testTag("smart_details_dialog"),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .padding(20.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    // Title and concise date/location
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 12.dp),
+                        horizontalAlignment = Alignment.Start
                     ) {
                         Text(
-                            text = "AURA SMART DETAILS",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
+                            text = photo.title,
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 17.sp
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                        IconButton(onClick = { showDetailsDialog = false }) {
-                            Icon(Icons.Default.Close, null)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text(
-                        text = "DESCRIPTION",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = photo.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Text(
-                        text = "SMART LABELS",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        val tagElements = photo.tags.split(",")
-                            .map { it.trim() }
-                            .filter { it.isNotBlank() && it != "face_checked" && it != "detected_face" }
-                        
-                        tagElements.forEach { item ->
-                            Surface(
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                shape = RoundedCornerShape(6.dp)
-                            ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = dateSubtitleText,
+                                color = Color(0xFFCBD5E1),
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (photo.location.isNotBlank() && photo.location != "Unknown Location") {
                                 Text(
-                                    text = "#$item",
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        color = MaterialTheme.colorScheme.primary,
-                                        fontWeight = FontWeight.Medium
-                                    )
+                                    text = " • 📍 ${photo.location}",
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    // Right Action Group
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Counter pill
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color(0x33FFFFFF),
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            Text(
+                                text = "${currentPhotoIndex + 1} / ${photos.size}",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
 
-                    Text(
-                        text = "LOCATION",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = photo.location.ifBlank { "Unknown" },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                        // Slideshow button
+                        IconButton(
+                            onClick = { isSlideshowActive = !isSlideshowActive },
+                            modifier = Modifier
+                                .background(
+                                    if (isSlideshowActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                                    else Color(0x33FFFFFF),
+                                    CircleShape
+                                )
+                                .size(42.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isSlideshowActive) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = "Toggle Slideshow",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
 
-                    Text(
-                        text = "TIMESTAMP & SECURITY",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = dateText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (showCloudSyncStatus) {
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = if (photo.isSynced) "Backed up online in Cloud" else "Local Storage Only (Unsynced)",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                        // Three dots overflow menu
+                        Box {
+                            IconButton(
+                                onClick = { showMenu = true },
+                                modifier = Modifier
+                                    .background(Color(0x33FFFFFF), CircleShape)
+                                    .size(42.dp)
+                                    .testTag("detail_three_dots_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = "Smart Actions Dropdown",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
 
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    Button(
-                        onClick = { showDetailsDialog = false },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Done")
+                            DropdownMenu(
+                                expanded = showMenu,
+                                onDismissRequest = { showMenu = false },
+                                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Edit Media Elements") },
+                                    onClick = {
+                                        showMenu = false
+                                        showEditorDialog = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.primary)
+                                    },
+                                    modifier = Modifier.testTag("menu_btn_edit_media")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Share File Natively") },
+                                    onClick = {
+                                        showMenu = false
+                                        sharePhotoNatively(context, photo)
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Share, null, tint = MaterialTheme.colorScheme.primary)
+                                    },
+                                    modifier = Modifier.testTag("menu_btn_native_share")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("View Smart Details") },
+                                    onClick = {
+                                        showMenu = false
+                                        showDetailsDialog = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.primary)
+                                    },
+                                    modifier = Modifier.testTag("menu_btn_info")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("View File Details") },
+                                    onClick = {
+                                        showMenu = false
+                                        showFileDetailsDialog = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Description, null, tint = MaterialTheme.colorScheme.primary)
+                                    },
+                                    modifier = Modifier.testTag("menu_btn_file_details")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Move to Album...") },
+                                    onClick = {
+                                        showMenu = false
+                                        showMoveToAlbumDialog = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Collections, null, tint = MaterialTheme.colorScheme.primary)
+                                    },
+                                    modifier = Modifier.testTag("menu_btn_move_to_album")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Move to Folder...") },
+                                    onClick = {
+                                        showMenu = false
+                                        showMoveToFolderDialog = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.FolderOpen, null, tint = MaterialTheme.colorScheme.primary)
+                                    },
+                                    modifier = Modifier.testTag("menu_btn_move_to_folder")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Scan with AI Vision") },
+                                    onClick = {
+                                        showMenu = false
+                                        onTriggerAI(photo)
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.tertiary)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (photo.isLocked) "Decrypt to Gallery" else "Lock in Secure Vault") },
+                                    onClick = {
+                                        showMenu = false
+                                        onToggleLock(photo)
+                                    },
+                                    leadingIcon = {
+                                        Icon(if (photo.isLocked) Icons.Default.LockOpen else Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.secondary)
+                                    },
+                                    modifier = Modifier.testTag("menu_btn_lock")
+                                )
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("Delete Permanently", color = MaterialTheme.colorScheme.error) },
+                                    onClick = {
+                                        showMenu = false
+                                        showDeleteConfirmDialog = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
+                                    },
+                                    modifier = Modifier.testTag("menu_btn_delete")
+                                )
+                            }
+                        }
                     }
                 }
             }
-        }
-    }
+
+            // Sleek bottom dock with thumbnail filmstrip and primary action buttons
+            AnimatedVisibility(
+                visible = areControlsVisible,
+                enter = fadeIn() + slideInVertically { it },
+                exit = fadeOut() + slideOutVertically { it },
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color(0x99000000),
+                                    Color(0xEE06090F)
+                                )
+                            )
+                        )
+                        .navigationBarsPadding()
+                        .padding(bottom = 12.dp)
+                ) {
+                    // Thumbnail Scrubber Filmstrip
+                    if (photos.size > 1) {
+                        val filmstripState = rememberLazyListState()
+                        LaunchedEffect(currentPhotoIndex) {
+                            filmstripState.animateScrollToItem((currentPhotoIndex - 2).coerceAtLeast(0))
+                        }
+
+                        LazyRow(
+                            state = filmstripState,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            items(photos.size) { index ->
+                                val itemPhoto = photos[index]
+                                val isSelected = index == currentPhotoIndex
+                                Surface(
+                                    modifier = Modifier
+                                        .size(width = 44.dp, height = 54.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .border(
+                                            width = if (isSelected) 2.5.dp else 1.dp,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else Color(0x33FFFFFF),
+                                            shape = RoundedCornerShape(8.dp)
+                                        )
+                                        .clickable {
+                                            coroutineScope.launch {
+                                                pagerState.animateScrollToPage(index)
+                                            }
+                                        }
+                                        .testTag("filmstrip_item_$index"),
+                                    color = Color(0xFF1E293B)
+                                ) {
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(context)
+                                            .data(itemPhoto.imageUrl)
+                                            .crossfade(true)
+                                            .build(),
+                                        contentDescription = itemPhoto.title,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Primary Ergonomic Action Dock: Share, Edit, Favorite, Details, Delete
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(28.dp),
+                        color = Color(0xDD0F172A),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFFFFF)),
+                        shadowElevation = 8.dp
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 6.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            DetailActionButton(
+                                icon = Icons.Default.Share,
+                                label = "Share",
+                                onClick = { sharePhotoNatively(context, photo) },
+                                testTag = "detail_native_share_button"
+                            )
+
+                            DetailActionButton(
+                                icon = Icons.Default.Edit,
+                                label = "Edit",
+                                onClick = { showEditorDialog = true },
+                                testTag = "detail_edit_media_button"
+                            )
+
+                            DetailActionButton(
+                                icon = if (photo.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                label = if (photo.isFavorite) "Favorite" else "Favorite",
+                                iconTint = if (photo.isFavorite) Color(0xFFFF3366) else Color.White,
+                                onClick = { onToggleFavorite(photo) },
+                                testTag = "detail_favorite_button"
+                            )
+
+                            DetailActionButton(
+                                icon = Icons.Default.Info,
+                                label = "Details",
+                                onClick = { showDetailsDialog = true },
+                                testTag = "detail_info_button"
+                            )
+
+                            DetailActionButton(
+                                icon = Icons.Default.DeleteOutline,
+                                label = "Delete",
+                                iconTint = MaterialTheme.colorScheme.error,
+                                onClick = { showDeleteConfirmDialog = true },
+                                testTag = "detail_delete_button"
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Safe Delete Confirmation Dialog
+            if (showDeleteConfirmDialog) {
+                AlertDialog(
+                    onDismissRequest = { showDeleteConfirmDialog = false },
+                    icon = {
+                        Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    },
+                    title = {
+                        Text("Delete Media?", fontWeight = FontWeight.Bold)
+                    },
+                    text = {
+                        Text("Are you sure you want to delete \"${photo.title}\"? You can restore it later from Trash.")
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showDeleteConfirmDialog = false
+                                onDelete(photo)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text("Delete")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
+
+            // Modal popup dialog containing all the "additional details" (Description, Smart Labels/Tags, Timestamp)
+            if (showDetailsDialog) {
+                val isVideo = photo.tags.split(",").map { it.trim().lowercase() }.contains("video")
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.65f))
+                        .clickable { showDetailsDialog = false },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth(0.92f)
+                            .clickable(
+                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                indication = null
+                            ) {}
+                            .testTag("smart_details_dialog"),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .padding(22.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Info,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier
+                                                .padding(8.dp)
+                                                .fillMaxSize()
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = "AURA SMART DETAILS",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                IconButton(onClick = { showDetailsDialog = false }) {
+                                    Icon(Icons.Default.Close, "Close")
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            // Quick stats chips row
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                val formatLabel = if (photo.mimeType.isNotBlank()) photo.mimeType.uppercase().substringAfter("/") else if (isVideo) "MP4" else "JPEG"
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("FORMAT", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(formatLabel, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("SIZE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        val sizeText = if (photo.sizeBytes > 0) {
+                                            val mb = photo.sizeBytes / (1024.0 * 1024.0)
+                                            if (mb >= 1.0) String.format(Locale.US, "%.1f MB", mb) else "${photo.sizeBytes / 1024} KB"
+                                        } else "Unknown"
+                                        Text(sizeText, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+
+                                if (photo.width > 0 && photo.height > 0) {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text("RES", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold)
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text("${photo.width}×${photo.height}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            Text(
+                                text = "DESCRIPTION",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = if (photo.description.isNotBlank()) photo.description else photo.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "SMART LABELS",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.secondary,
+                                    fontWeight = FontWeight.Bold
+                                )
+
+                                TextButton(
+                                    onClick = { onTriggerAI(photo) },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                ) {
+                                    Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Re-scan AI", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            if (isAnalyzing(photo)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Analyzing image with AI...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+
+                            val tagElements = photo.tags.split(",")
+                                .map { it.trim() }
+                                .filter { it.isNotBlank() && it != "face_checked" && it != "detected_face" && !it.startsWith("filter:") && !it.startsWith("rotate:") && !it.startsWith("crop:") && !it.startsWith("watermark_") && !it.startsWith("sticker") }
+
+                            if (tagElements.isNotEmpty()) {
+                                FlowRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    tagElements.forEach { item ->
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text(
+                                                text = "#$item",
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                                style = MaterialTheme.typography.labelMedium.copy(
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                Text("No tags yet. Tap 'Re-scan AI' to automatically detect objects and scenes.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            Text(
+                                text = "LOCATION",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.LocationOn, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = photo.location.ifBlank { "Unknown" },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            Text(
+                                text = "TIMESTAMP & SECURITY",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = dateFullText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (showCloudSyncStatus) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (photo.isSynced) Color(0xFF10B981).copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant
+                                ) {
+                                    Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            if (photo.isSynced) Icons.Default.CloudDone else Icons.Default.CloudQueue,
+                                            contentDescription = null,
+                                            tint = if (photo.isSynced) Color(0xFF10B981) else MaterialTheme.colorScheme.outline,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (photo.isSynced) "Backed up online in Cloud" else "Local Storage Only (Unsynced)",
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                color = if (photo.isSynced) Color(0xFF10B981) else MaterialTheme.colorScheme.outline,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            Text(
+                                text = "STORAGE PATH",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = photo.imageUrl,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = {
+                                        clipboardManager.setText(AnnotatedString(photo.imageUrl))
+                                        Toast.makeText(context, "Path copied to clipboard", Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Default.ContentCopy, "Copy Path", modifier = Modifier.size(16.dp))
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(20.dp))
+
+                            Button(
+                                onClick = { showDetailsDialog = false },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Done")
+                            }
+                        }
+                    }
+                }
+            }
 
     // Modal popup dialog containing local file details (Local path, size, resolution, Last Modified, etc.)
     if (showFileDetailsDialog) {

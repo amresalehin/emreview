@@ -2268,8 +2268,12 @@ class GalleryViewModel(application: Application, private val repository: PhotoRe
 
 enum class SyncFilter { ALL, SYNCED, UNSYNCED }
 
-enum class ViewMode {
-    GRID, LIST
+enum class ViewMode(val label: String) {
+    GRID("Grid (3x3)"),
+    MASONRY("Masonry Staggered"),
+    COZY("Cozy (2x2)"),
+    COMPACT("Compact (4x4)"),
+    LIST("Detailed List")
 }
 
 enum class GallerySortOption(val displayName: String) {
