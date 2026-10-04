@@ -11,6 +11,7 @@ permissions:
   contents: read
 
 jobs:
+  # Release gate: every push on emreview-dev-fix must produce verified APKs.
   build:
     runs-on: ubuntu-latest
     steps:
