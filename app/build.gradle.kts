@@ -30,7 +30,7 @@ android {
 
   splits {
     abi {
-      isEnable = true
+      isEnable = providers.gradleProperty("apkSplits").isPresent
       reset()
       include("arm64-v8a", "armeabi-v7a", "x86_64")
       isUniversalApk = false
