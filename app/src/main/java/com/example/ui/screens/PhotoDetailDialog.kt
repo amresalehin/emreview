@@ -58,6 +58,11 @@ import android.net.Uri
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.text.BasicTextField
@@ -564,11 +569,20 @@ fun ZoomableAsyncImage(
     currentPage: Int,
     tags: String = "",
     onClick: () -> Unit,
-    onZoomChanged: ((Boolean) -> Unit)? = null
+    onZoomChanged: ((Boolean) -> Unit)? = null,
+    onDismiss: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var scale by remember(currentPage) { mutableFloatStateOf(1f) }
     var offset by remember(currentPage) { mutableStateOf(Offset.Zero) }
+    var dismissOffsetY by remember(currentPage) { mutableFloatStateOf(0f) }
+
+    val animatedDismissY by animateFloatAsState(
+        targetValue = dismissOffsetY,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "dismissY"
+    )
+    val dismissAlpha = (1f - (dismissOffsetY / 600f)).coerceIn(0.2f, 1f)
 
     // If back pressed while zoomed in, reset zoom back to 1x first
     BackHandler(enabled = scale > 1.05f) {
@@ -580,6 +594,10 @@ fun ZoomableAsyncImage(
     val gestureModifier = Modifier
         .fillMaxSize()
         .clip(RectangleShape)
+        .graphicsLayer {
+            translationY = animatedDismissY
+            alpha = dismissAlpha
+        }
         .pointerInput(currentPage) {
             detectTapGestures(
                 onDoubleTap = { tapOffset ->
@@ -604,21 +622,61 @@ fun ZoomableAsyncImage(
             )
         }
         .pointerInput(currentPage) {
-            detectTransformGestures(panZoomLock = true) { _, pan, zoom, _ ->
-                val newScale = (scale * zoom).coerceIn(1f, 5f)
-                scale = newScale
-                val isZoomed = newScale > 1.05f
-                onZoomChanged?.invoke(isZoomed)
+            awaitEachGesture {
+                var isDraggingDismiss = false
+                do {
+                    val event = awaitPointerEvent()
+                    val pointerCount = event.changes.size
 
-                if (isZoomed) {
-                    val maxOffsetX = (size.width * (newScale - 1f)) / 2f
-                    val maxOffsetY = (size.height * (newScale - 1f)) / 2f
-                    offset = Offset(
-                        x = (offset.x + pan.x * newScale).coerceIn(-maxOffsetX, maxOffsetX),
-                        y = (offset.y + pan.y * newScale).coerceIn(-maxOffsetY, maxOffsetY)
-                    )
+                    if (pointerCount >= 2) {
+                        // Multi-touch: PINCH TO ZOOM
+                        val zoom = event.calculateZoom()
+                        val pan = event.calculatePan()
+                        val newScale = (scale * zoom).coerceIn(1f, 5f)
+                        scale = newScale
+                        val isZoomed = newScale > 1.05f
+                        onZoomChanged?.invoke(isZoomed)
+
+                        if (isZoomed) {
+                            val maxOffsetX = (size.width * (newScale - 1f)) / 2f
+                            val maxOffsetY = (size.height * (newScale - 1f)) / 2f
+                            offset = Offset(
+                                x = (offset.x + pan.x * newScale).coerceIn(-maxOffsetX, maxOffsetX),
+                                y = (offset.y + pan.y * newScale).coerceIn(-maxOffsetY, maxOffsetY)
+                            )
+                        } else {
+                            offset = Offset.Zero
+                        }
+                        event.changes.forEach { it.consume() }
+                    } else if (pointerCount == 1 && scale > 1.05f) {
+                        // Zoomed in: PAN PHOTO
+                        val change = event.changes.first()
+                        val pan = change.positionChange()
+                        val maxOffsetX = (size.width * (scale - 1f)) / 2f
+                        val maxOffsetY = (size.height * (scale - 1f)) / 2f
+                        offset = Offset(
+                            x = (offset.x + pan.x).coerceIn(-maxOffsetX, maxOffsetX),
+                            y = (offset.y + pan.y).coerceIn(-maxOffsetY, maxOffsetY)
+                        )
+                        change.consume()
+                    } else if (pointerCount == 1 && scale <= 1.05f) {
+                        // 1x scale: detect vertical swipe down for dismiss, DO NOT consume horizontal drag
+                        val change = event.changes.first()
+                        val dy = change.positionChange().y
+                        val dx = change.positionChange().x
+
+                        if (isDraggingDismiss || (dy > 0 && Math.abs(dy) > Math.abs(dx) * 1.3f)) {
+                            isDraggingDismiss = true
+                            dismissOffsetY = (dismissOffsetY + dy).coerceAtLeast(0f)
+                            change.consume()
+                        }
+                    }
+                } while (event.changes.any { it.pressed })
+
+                if (dismissOffsetY > 150f) {
+                    onDismiss?.invoke()
                 } else {
-                    offset = Offset.Zero
+                    dismissOffsetY = 0f
                 }
             }
         }
@@ -638,9 +696,9 @@ fun ZoomableAsyncImage(
             modifier = Modifier
                 .let { 
                     if (cropRatio != null) {
-                        it.aspectRatio(cropRatio).fillMaxWidth(0.95f)
+                        it.aspectRatio(cropRatio).fillMaxWidth()
                     } else {
-                        it.fillMaxSize(0.95f)
+                        it.fillMaxSize()
                     }
                 }
         ) {

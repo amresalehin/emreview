@@ -68,6 +68,10 @@ import kotlinx.coroutines.launch
 import com.example.data.Photo
 import com.example.ui.GalleryViewModel
 import com.example.ui.SyncFilter
+import com.example.ui.buildMediaImageRequest
+import com.example.ui.isVideoAsset
+import com.example.ui.VideoThumbnailPlaceholder
+import com.example.ui.screens.GalleryFastScrollBar
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -136,14 +140,41 @@ fun GalleryScreen(
             (if (syncFilter != SyncFilter.ALL) 1 else 0) +
             (if (selectedCustomLabel != null) 1 else 0)
 
-    // Autohide flyout whenever the user scrolls
-    LaunchedEffect(gridState.isScrollInProgress) {
-        if (gridState.isScrollInProgress && isFilterFlyoutOpen) {
-            isFilterFlyoutOpen = false
+    // Autohide flyer whenever the user scrolls in any view mode (Grid, Cozy, Compact, Masonry, List)
+    LaunchedEffect(gridState, staggeredGridState, listState) {
+        var lastGridIndex = gridState.firstVisibleItemIndex
+        var lastGridOffset = gridState.firstVisibleItemScrollOffset
+        var lastStaggeredIndex = staggeredGridState.firstVisibleItemIndex
+        var lastStaggeredOffset = staggeredGridState.firstVisibleItemScrollOffset
+        var lastListIndex = listState.firstVisibleItemIndex
+        var lastListOffset = listState.firstVisibleItemScrollOffset
+
+        snapshotFlow {
+            Triple(
+                Pair(gridState.firstVisibleItemIndex, gridState.firstVisibleItemScrollOffset),
+                Pair(staggeredGridState.firstVisibleItemIndex, staggeredGridState.firstVisibleItemScrollOffset),
+                Pair(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+            )
+        }.collect { (gridPos, stagPos, listPos) ->
+            val hasScrolled = gridPos.first != lastGridIndex || gridPos.second != lastGridOffset ||
+                    stagPos.first != lastStaggeredIndex || stagPos.second != lastStaggeredOffset ||
+                    listPos.first != lastListIndex || listPos.second != lastListOffset
+            if (hasScrolled) {
+                lastGridIndex = gridPos.first
+                lastGridOffset = gridPos.second
+                lastStaggeredIndex = stagPos.first
+                lastStaggeredOffset = stagPos.second
+                lastListIndex = listPos.first
+                lastListOffset = listPos.second
+                if (isFilterFlyoutOpen) {
+                    isFilterFlyoutOpen = false
+                }
+            }
         }
     }
-    LaunchedEffect(listState.isScrollInProgress) {
-        if (listState.isScrollInProgress && isFilterFlyoutOpen) {
+
+    LaunchedEffect(gridState.isScrollInProgress, staggeredGridState.isScrollInProgress, listState.isScrollInProgress) {
+        if ((gridState.isScrollInProgress || staggeredGridState.isScrollInProgress || listState.isScrollInProgress) && isFilterFlyoutOpen) {
             isFilterFlyoutOpen = false
         }
     }

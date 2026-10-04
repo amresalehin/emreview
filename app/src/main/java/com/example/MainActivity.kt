@@ -43,6 +43,9 @@ import com.example.ui.screens.SecureFolderScreen
 import com.example.ui.screens.SyncScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.TrashScreen
+import coil.Coil
+import coil.ImageLoader
+import coil.decode.VideoFrameDecoder
 import com.example.ui.theme.MyApplicationTheme
 import android.widget.Toast
 import android.content.Context
@@ -62,6 +65,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Enable video thumbnail frame decoding globally for all AsyncImages
+        Coil.setImageLoader(
+            ImageLoader.Builder(applicationContext)
+                .components {
+                    add(VideoFrameDecoder.Factory())
+                }
+                .crossfade(true)
+                .build()
+        )
 
         setContent {
             MyApplicationTheme {
